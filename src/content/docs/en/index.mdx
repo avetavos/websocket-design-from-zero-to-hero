@@ -1,6 +1,63 @@
 ---
 title: WebSocket Design — From Zero to Hero
-description: Design real-time systems with WebSockets — the handshake, the client API, message design, heartbeats & reconnection, server design, scaling & pub/sub, and security — with TypeScript.
+description: Design real-time systems with WebSockets from first principles — the handshake, the client API, message design, heartbeats & reconnection, server design, scaling & pub/sub, security, and patterns — with WebSockets that run right in your browser.
 template: splash
+hero:
+  tagline: A standalone, beginner→advanced course on designing real-time systems with WebSockets, taught with TypeScript. From the handshake to message design, heartbeats & reconnection, server design, scaling, and security — with the real WebSocket API running in the browser.
+  actions:
+    - text: Start here
+      link: /websocket-design-from-zero-to-hero/en/websocket-foundations/
+      icon: right-arrow
+      variant: primary
+    - text: Jump to the Client API
+      link: /websocket-design-from-zero-to-hero/en/the-client-api/
+      icon: open-book
 ---
-Coming soon.
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What you'll learn
+
+<CardGrid>
+  <Card title="WebSocket Foundations" icon="rocket">
+    What WebSockets are, the upgrade handshake, frames, and how they differ from HTTP. [Start →](/websocket-design-from-zero-to-hero/en/websocket-foundations/)
+  </Card>
+  <Card title="The Client API" icon="seti:plan">
+    new WebSocket, events & readyState, sending/receiving, binary data. [Connect →](/websocket-design-from-zero-to-hero/en/the-client-api/)
+  </Card>
+  <Card title="Message Design" icon="seti:json">
+    Framing, JSON vs binary, request/response with correlation ids, versioning. [Design →](/websocket-design-from-zero-to-hero/en/message-design/)
+  </Card>
+  <Card title="Connection Lifecycle" icon="seti:clock">
+    Heartbeats, detecting dead connections, reconnection with backoff, close codes. [Keep alive →](/websocket-design-from-zero-to-hero/en/connection-lifecycle/)
+  </Card>
+  <Card title="Server Design" icon="seti:config">
+    The ws library, connection state, rooms & broadcast, backpressure. [Serve →](/websocket-design-from-zero-to-hero/en/server-design/)
+  </Card>
+  <Card title="Scaling & Pub/Sub" icon="random">
+    Why one process won't scale, a pub/sub backplane, presence, sticky vs stateless. [Scale →](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/)
+  </Card>
+  <Card title="Security" icon="approve-check">
+    Origin & handshake auth, authorization, rate limiting, TLS & DoS. [Secure →](/websocket-design-from-zero-to-hero/en/security/)
+  </Card>
+  <Card title="Patterns & Alternatives" icon="puzzle">
+    Pub/sub & rooms, RPC over WS, WS vs SSE vs WebTransport, a working app. [Apply →](/websocket-design-from-zero-to-hero/en/patterns-and-alternatives/)
+  </Card>
+</CardGrid>
+
+## How this course works
+
+<CardGrid>
+  <Card title="WebSockets run in your browser" icon="rocket">
+    Client demos use a faithful in-page echo socket with the real WebSocket API — open, send, receive, close — and full Node ws servers open in StackBlitz.
+  </Card>
+  <Card title="Diagrams that explain" icon="puzzle">
+    The upgrade handshake, the connection state machine, reconnection, and pub/sub fan-out as theme-aware Mermaid diagrams.
+  </Card>
+  <Card title="Design, not just syntax" icon="approve-check">
+    Every topic covers the why and the trade-offs — heartbeats, message protocols, scaling a stateful connection, and securing a long-lived socket.
+  </Card>
+  <Card title="Bilingual + read mode" icon="translate">
+    English and ไทย, quizzes with saved progress, and a distraction-free read mode.
+  </Card>
+</CardGrid>
