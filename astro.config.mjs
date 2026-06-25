@@ -9,12 +9,12 @@ export default defineConfig({
   // GitHub Pages project site. Update `site` to your GitHub username and `base`
   // to your repo name if they differ.
   site: 'https://avetavos.github.io',
-  base: '/nodejs-deep-dive',
+  base: '/websocket-design-from-zero-to-hero',
   output: 'static',
   integrations: [starlight({
-      title: 'Node.js Deep Dive',
+      title: 'WebSocket Design — From Zero to Hero',
       head: [
-        { tag: 'script', attrs: { type: 'module', src: '/nodejs-deep-dive/enhance.js' } },
+        { tag: 'script', attrs: { type: 'module', src: '/websocket-design-from-zero-to-hero/enhance.js' } },
       ],
       defaultLocale: 'en',
       locales: {
@@ -22,15 +22,16 @@ export default defineConfig({
         th: { label: 'ไทย', lang: 'th' },
       },
       customCss: ['./src/styles/custom.css'],
-      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/avetavos/nodejs-deep-dive' }],
+      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/avetavos/websocket-design-from-zero-to-hero' }],
       sidebar: [
-        { label: 'JavaScript Essentials', items: [{ autogenerate: { directory: 'js-essentials' } }] },
-        { label: 'Event Loop & Async', items: [{ autogenerate: { directory: 'event-loop-async' } }] },
-        { label: 'Core APIs', items: [{ autogenerate: { directory: 'core-apis' } }] },
-        { label: 'Streams & I/O', items: [{ autogenerate: { directory: 'streams' } }] },
-        { label: 'HTTP & Networking', items: [{ autogenerate: { directory: 'http-networking' } }] },
-        { label: 'Modules & npm', items: [{ autogenerate: { directory: 'modules-npm' } }] },
-        { label: 'Testing & Tooling', items: [{ autogenerate: { directory: 'testing-tooling' } }] },
+        { label: 'WebSocket Foundations', items: [{ autogenerate: { directory: 'websocket-foundations' } }] },
+        { label: 'The Client API', items: [{ autogenerate: { directory: 'the-client-api' } }] },
+        { label: 'Message Design', items: [{ autogenerate: { directory: 'message-design' } }] },
+        { label: 'Connection Lifecycle', items: [{ autogenerate: { directory: 'connection-lifecycle' } }] },
+        { label: 'Server Design', items: [{ autogenerate: { directory: 'server-design' } }] },
+        { label: 'Scaling & Pub/Sub', items: [{ autogenerate: { directory: 'scaling-and-pubsub' } }] },
+        { label: 'Security', items: [{ autogenerate: { directory: 'security' } }] },
+        { label: 'Patterns & Alternatives', items: [{ autogenerate: { directory: 'patterns-and-alternatives' } }] },
       ],
       }), preact()],
 });
