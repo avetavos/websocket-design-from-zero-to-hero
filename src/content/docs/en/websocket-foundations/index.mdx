@@ -1,5 +1,130 @@
 ---
-title: WebSocket Foundations
-description: What WebSockets are, the upgrade handshake, and how they differ from HTTP.
+title: 'WebSocket Foundations'
+description: 'What WebSockets are, why real-time apps need them, and a first in-browser echo using the real WebSocket API.'
+sidebar:
+  order: 1
 ---
-Coming soon.
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Welcome. This is the first module of **WebSocket Design — From Zero to Hero**, and by the end of this single page you will have opened a real, live WebSocket connection from your own browser and watched messages flow both ways.
+
+## What is a WebSocket?
+
+A **WebSocket** is a persistent, full-duplex connection that lives on top of a single TCP socket. Two words there carry all the weight:
+
+- **Persistent** — once it is open, it stays open. There is no fresh request for every exchange; the same pipe is reused until one side decides to close it.
+- **Full-duplex** — both ends can send at any moment, independently, without waiting for the other to ask. The server can push to the client just as freely as the client sends to the server.
+
+That is the whole idea in one sentence: **one long-lived connection where either side can speak whenever it has something to say.**
+
+## Why real-time needs this
+
+Plain HTTP is built around a polite turn-taking ritual: the client asks, the server answers, the connection's job is done. That works beautifully for loading a web page. It works badly for anything that needs to feel *alive* — a chat thread, a live scoreboard, a shared document, a price ticker. In those apps the interesting events originate on the **server**, at unpredictable times, and the client has no way to know when to ask.
+
+Before WebSockets, developers faked liveness by asking *over and over* (polling). It is wasteful and always a little late. A WebSocket removes the asking entirely: the server simply sends the moment the event happens.
+
+<Mermaid title="One persistent connection, messages in both directions" code={overviewDiagram} />
+
+export const overviewDiagram = `flowchart LR
+  C["Browser client"] -- "send anytime" --> S["Server"]
+  S -- "push anytime" --> C
+  subgraph conn["one long-lived TCP connection"]
+    C
+    S
+  end`;
+
+## What this module covers
+
+This module — **WebSocket Foundations** — is the conceptual bedrock for everything that follows:
+
+1. **Foundations (you are here)** — what a WebSocket is and a first real echo.
+2. **What are WebSockets** — one connection versus many HTTP round-trips, and where they shine.
+3. **WebSockets vs HTTP, polling and SSE** — the alternatives and their trade-offs.
+4. **The handshake** — how a connection is born from an ordinary HTTP request.
+5. **Frames and the protocol** — how bytes actually travel once the connection is live.
+
+Later modules build on this toward the client API, message design, connection lifecycle, server design, scaling, and security.
+
+## Your first WebSocket
+
+Enough theory. The code below runs **in your browser**. So the lesson stays self-contained — no server to spin up — it talks to a tiny in-page echo socket that behaves exactly like the real thing: the same `onopen`, `onmessage`, `send`, and `close`. In a real app the only line that changes is the first one, `new WebSocket('wss://your-server')`. (Open any **StackBlitz** demo later in the course to run a genuine Node server.) Press **Run** and watch the console.
+
+export const echoCode = `(function () {
+  // A tiny in-page echo socket with the SAME API as the browser's WebSocket,
+  // so this runs anywhere. In a real app: const ws = new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0; // CONNECTING
+      setTimeout(() => {
+        this.readyState = 1; // OPEN
+        if (this.onopen) this.onopen({});
+        if (this.onmessage) this.onmessage({ data: 'Welcome — this echo server repeats whatever you send.' });
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  let received = 0;
+  ws.onopen = () => {
+    console.log('connection open');
+    ws.send('hello, server');
+  };
+  ws.onmessage = (event) => {
+    received += 1;
+    console.log('received:', event.data);
+    if (received === 2) ws.close();
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={echoCode} />
+
+You should see `connection open`, then **two** received lines — a greeting the server sends on connect, then your own `hello, server` echoed straight back — then `closed`. That round trip — open, send, receive, close — is the entire shape of every WebSocket app you will ever build. Swap the in-page socket for `new WebSocket(url)` and the surrounding code is identical.
+
+<Callout title="The mental model to keep">
+A WebSocket is a single TCP connection that stays open and lets **both** sides send messages whenever they want. Hold onto that picture; every lesson in this course is an elaboration of it.
+</Callout>
+
+export const quizFoundations = [
+  {
+    q: 'Which two properties best describe a WebSocket connection?',
+    options: [
+      'Stateless and request-scoped',
+      'Persistent and full-duplex',
+      'One-way and short-lived',
+      'Encrypted and request/response only',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is plain HTTP awkward for real-time features like live chat?',
+    options: [
+      'HTTP cannot transfer text data',
+      'The server has no built-in way to push events when the client is not asking',
+      'HTTP connections are always slower than the network',
+      'HTTP cannot be used with TLS',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In the demo, why did the echo server send two messages back?',
+    options: [
+      'The browser sent the message twice',
+      'It sends a greeting on connect, then echoes what you send',
+      'WebSockets always duplicate every message',
+      'The connection reopened automatically',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="websocket-foundations/index" questions={quizFoundations} />
+
+<ProgressTracker client:visible id="websocket-foundations/index" />

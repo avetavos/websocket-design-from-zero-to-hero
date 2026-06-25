@@ -1,0 +1,139 @@
+---
+title: 'Rate Limiting and Validation'
+description: 'ไคลเอนต์ถล่มคุณได้ — ใช้ rate limit แบบ token-bucket ราย connection, จำกัดขนาด message, และ validate ทุก message อย่างระแวดระวัง'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+WebSocket ที่เปิดอยู่คือคำเชิญที่เปิดกว้าง เมื่อ handshake เสร็จแล้ว ไคลเอนต์ส่ง message ได้มากเท่าที่ต้องการ, ใหญ่เท่าที่ต้องการ, ในรูปแบบใดก็ได้ที่ต้องการ — และเซิร์ฟเวอร์จะพยายามจัดการทุกอันอย่างซื่อสัตย์ ไคลเอนต์ที่มี bug หรือที่ประสงค์ร้าย สามารถเปลี่ยนความใจกว้างนั้นให้เป็น denial of service บทเรียนนี้เป็นเรื่องของการป้องกันราคาถูกสามอย่างที่กันไม่ให้การเชื่อมต่อเดียวทำลายงานเลี้ยง: **rate limiting**, **size cap**, และ **defensive validation**
+
+## ไคลเอนต์ถล่มคุณได้
+
+ไม่มี throttle ในตัวบน WebSocket ลูป `while (true) ws.send(...)` ในเบราว์เซอร์จะยิง frame หลายพันต่อวินาทีไปที่เซิร์ฟเวอร์ของคุณ แต่ละอันปลุก event loop ของคุณ, allocate, parse, และรัน handler ของคุณ คูณด้วยจำนวนไคลเอนต์ที่เชื่อมต่ออยู่ และ peer ที่ใช้งานในทางที่ผิดเพียงตัวเดียวก็ทำให้ CPU อิ่มตัว, ทำให้ memory หมด, หรือยัดงานเข้า loop มากเสียจน message ของ *ทุกไคลเอนต์อื่น* ถูกหน่วง คุณต้องการเพดาน และมันต้องเป็น **ราย connection** เพื่อที่พฤติกรรมแย่ ๆ ของไคลเอนต์หนึ่งจะกินงบของทุกคนอื่นไม่ได้
+
+## Token bucket: rate limit ที่ยอมให้มี burst
+
+อัลกอริทึมคลาสสิกคือ **token bucket** แต่ละ connection เป็นเจ้าของ bucket ที่มี **capacity** สูงสุดของ token Token จะ **refill** ในอัตราคงที่เมื่อเวลาผ่านไป ทุก message **มีต้นทุน** หนึ่ง token: ถ้ามี token อยู่ message จะถูกประมวลผลและ token หนึ่งตัวถูกเอาออก; ถ้า bucket ว่าง message จะถูกปฏิเสธ (หรือ connection ถูกปิดถ้าใช้งานในทางที่ผิดซ้ำ ๆ)
+
+รูปร่างของสิ่งนี้คือสิ่งที่คุณต้องการพอดีสำหรับ traffic แบบ chat: ผู้ใช้ส่ง **burst** สั้น ๆ ได้ (ใช้ทั้ง bucket ในคราวเดียว) แต่อัตรา **sustained** ของพวกเขาถูกจำกัดด้วยอัตรา refill เลือก capacity เป็น เช่น 10 และ refill 5 ต่อวินาที แล้วคุณจะได้ "10 ใน burst แล้วหลังจากนั้น 5/วินาที"
+
+<Mermaid title="Token bucket: token เติมเมื่อเวลาผ่านไป; แต่ละ message ใช้หนึ่งตัว" code={bucketDiagram} />
+
+export const bucketDiagram = `flowchart TB
+  R["Refill: +rate tokens/sec<br/>(capped at capacity)"] --> B["Bucket<br/>(0 … capacity tokens)"]
+  M["Incoming message"] --> Q{"tokens >= 1 ?"}
+  B --> Q
+  Q -- "yes: spend 1 token" --> P["Process message"]
+  Q -- "no: bucket empty" --> D["Reject / throttle<br/>(close on repeat abuse)"]`;
+
+## Validate ทุก message อย่างระแวดระวัง
+
+Rate limiting จำกัด *จำนวนเท่าไร*; validation จำกัด *อะไร* จงมองทุก frame ที่เข้ามาว่าเป็นศัตรูจนกว่าจะพิสูจน์ได้ว่าไม่ใช่:
+
+- **จำกัดขนาดก่อน** ปฏิเสธ frame ที่ใหญ่กว่าลิมิตที่สมเหตุสมผล (ไม่กี่ KB สำหรับ chat, มากกว่านั้นสำหรับ payload ที่รู้จัก) **ก่อน** ที่คุณจะ parse มัน WebSocket library ส่วนใหญ่ให้คุณตั้ง `maxPayload` ได้ เพื่อที่ frame ที่ใหญ่เกินจะถูกปฏิเสธในระดับ protocol — ใช้มัน แล้วตรวจซ้ำใน handler ของคุณ
+- **Parse ใน `try/catch`** การ `JSON.parse` บน input ของผู้โจมตี *จะ* throw ในที่สุด จับมัน; อย่าปล่อยให้ frame ที่ผิดรูปทำให้การเชื่อมต่อหรือ process crash
+- **Validate รูปร่าง** ยืนยันว่า `type` เป็น string ที่รู้จัก, field ที่จำเป็นมีอยู่และมี type ถูกต้อง, string อยู่ในความยาว, number อยู่ในช่วง ปฏิเสธอะไรก็ตามที่ไม่ตรงกับรูปร่าง message ที่รู้จัก — อย่า "พยายามเต็มที่" ฝ่าขยะไป
+
+## เดโม token-bucket และ validation ที่รันได้จริง
+
+เพราะ rate limiting เป็น logic ล้วน ๆ เดโมด้านล่างจึงรัน **ในหน้าเว็บ** — ไม่ต้องใช้เซิร์ฟเวอร์ มันimplement token bucket และ validator แบบระแวดระวัง จากนั้น replay burst ของ message (บางอันถูกต้อง, บางอันผิดรูป, บางอันใหญ่เกิน) แล้วแสดงว่าอันไหนถูกยอมรับ, ถูก throttle, หรือถูกปฏิเสธ ฟังก์ชัน `consume()` และ `validate()` เดียวกันนี้หย่อนลงใน `ws.on('message')` handler จริงได้ทันที
+
+export const bucketDemoCode = `(function () {
+  // --- Token bucket: capacity 5, refill 2 tokens/sec ---
+  function makeBucket(capacity, refillPerSec) {
+    return { tokens: capacity, capacity: capacity, rate: refillPerSec, last: Date.now() };
+  }
+  function consume(b) {
+    const now = Date.now();
+    b.tokens = Math.min(b.capacity, b.tokens + ((now - b.last) / 1000) * b.rate);
+    b.last = now;
+    if (b.tokens >= 1) { b.tokens -= 1; return true; }
+    return false;
+  }
+
+  // --- Defensive validation ---
+  const MAX_BYTES = 64;
+  function validate(raw) {
+    if (raw.length > MAX_BYTES) return { ok: false, reason: 'too large' };
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return { ok: false, reason: 'bad json' }; }
+    if (typeof msg !== 'object' || msg === null) return { ok: false, reason: 'not an object' };
+    if (msg.type !== 'chat') return { ok: false, reason: 'unknown type' };
+    if (typeof msg.text !== 'string' || msg.text.length === 0) return { ok: false, reason: 'bad text' };
+    return { ok: true, msg: msg };
+  }
+
+  // --- Simulate a burst of incoming frames over one connection ---
+  const bucket = makeBucket(5, 2);
+  const incoming = [
+    '{"type":"chat","text":"hi"}',
+    '{"type":"chat","text":"how are you"}',
+    'not json at all',
+    '{"type":"chat","text":"' + 'x'.repeat(100) + '"}',
+    '{"type":"delete","text":"nope"}',
+    '{"type":"chat","text":"msg 3"}',
+    '{"type":"chat","text":"msg 4"}',
+    '{"type":"chat","text":"flood 1"}',
+    '{"type":"chat","text":"flood 2"}',
+    '{"type":"chat","text":"flood 3 — over budget"}',
+  ];
+
+  for (const raw of incoming) {
+    if (!consume(bucket)) { console.log('THROTTLED (bucket empty):', raw.slice(0, 28)); continue; }
+    const v = validate(raw);
+    if (!v.ok) { console.log('REJECTED (' + v.reason + '):', raw.slice(0, 28)); continue; }
+    console.log('ACCEPTED:', v.msg.text);
+  }
+  console.log('tokens left:', bucket.tokens.toFixed(2));
+})();`;
+
+<NodeRunner client:visible code={bucketDemoCode} />
+
+รันมันแล้วอ่านคำตัดสิน: frame ที่ผิดรูป, ใหญ่เกิน, และ type ที่ไม่รู้จัก ถูก **ปฏิเสธ** โดย validator และเมื่อ burst ทำให้ bucket ห้า token หมด frame ที่ตามมาจะถูก **throttle** ไม่ว่าเนื้อหาจะเป็นอย่างไร การ์ดสองอันที่เป็นอิสระต่อกัน — อันหนึ่งคุม *rate*, อันหนึ่งคุม *รูปร่าง* — และการเชื่อมต่อเดียวจะถล่มหรือทำให้เซิร์ฟเวอร์สับสนไม่ได้อีกต่อไป
+
+<Callout title="จำกัดทั้ง rate และรูปร่าง ราย connection">
+WebSocket ไม่มี throttle ในตัว ดังนั้นเพิ่มเข้าไป: **token bucket ราย connection** จำกัดจำนวน message ที่ไคลเอนต์ส่งได้, **size cap** (ใช้ `maxPayload` ของ library) หยุด frame ที่ใหญ่เกิน, และ **การ parse แบบ `try/catch` บวกกับ validate รูปร่าง** หยุด frame ที่ผิดรูป ใช้ทั้งสามอย่างกับทุก connection — ไคลเอนต์ที่ใช้งานในทางที่ผิดหนึ่งตัวต้องไม่มีทางทำให้ตัวอื่นอดอยากได้เลย
+</Callout>
+
+export const quizRate = [
+  {
+    q: 'What property makes a token bucket well suited to chat-style traffic?',
+    options: [
+      'It blocks all bursts and enforces a perfectly constant rate',
+      'It allows a short burst up to the bucket capacity, then caps the sustained rate at the refill rate',
+      'It never rejects any message',
+      'It rate-limits globally rather than per connection',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why should rate limiting be per connection rather than global?',
+    options: [
+      'Global limits are impossible to implement',
+      'So that one abusive client cannot consume the budget that other clients need',
+      'Because the Origin header is per connection',
+      'Because WebSockets cannot count globally',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the safe way to handle an incoming JSON message frame?',
+    options: [
+      'Parse it directly and trust its fields',
+      'Cap its size, parse it in try/catch, then validate the type and field shapes before using it',
+      'Only check that it is valid JSON',
+      'Reject every message that is not empty',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="security/rate-limiting-and-validation" questions={quizRate} />
+
+<ProgressTracker client:visible id="security/rate-limiting-and-validation" />

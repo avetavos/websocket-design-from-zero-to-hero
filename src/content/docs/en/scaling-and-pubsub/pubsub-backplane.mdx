@@ -1,0 +1,180 @@
+---
+title: 'A Pub/Sub Backplane'
+description: 'Put a shared bus between instances so every published message reaches every instance, which then fans out to its own local clients — with a runnable two-instance demo.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The previous lesson left us with a clean statement of the problem: instance A cannot see the sockets held by instance B, so a broadcast on A can never reach a client on B. The fix is to stop trying to reach the *other instance's sockets* directly, and instead reach the *other instance*. Give every instance a shared line they all listen on, and let each instance be responsible for its own local clients.
+
+That shared line is a **pub/sub backplane**.
+
+## The pattern: publish once, fan out everywhere
+
+The flow has exactly two moves, and getting them in the right order is the whole trick:
+
+1. **Publish, don't send.** When a client sends a message, the instance does *not* loop over its local sockets first. It **publishes** the message to a shared channel on the bus.
+2. **Subscribe and fan out.** Every instance — including the one that published — is **subscribed** to that channel. When the bus delivers the message, each instance loops over *its own* local clients and sends.
+
+The publishing instance treats itself like any other subscriber. There is no special "and also send locally" branch; local delivery happens because the publisher is also a subscriber. One code path, every client reached.
+
+<Mermaid title="Publish to the bus once; every instance fans out to its own clients" code={fanoutDiagram} />
+
+export const fanoutDiagram = `flowchart TB
+  a1["client 1"] -- "sends message" --> A["Instance A"]
+  A == "1. publish to channel" ==> bus[["Shared bus (Redis / NATS / Kafka)"]]
+  bus == "2. deliver to all subscribers" ==> A
+  bus == "2. deliver to all subscribers" ==> B["Instance B"]
+  A -- "3. fan out locally" --> a1
+  A -- "3. fan out locally" --> a2["client 2"]
+  B -- "3. fan out locally" --> b1["client 3"]
+  B -- "3. fan out locally" --> b2["client 4"]`;
+
+## What this looks like in code
+
+The handler shrinks rather than grows. Receiving a client message becomes a single publish; all delivery logic moves into the subscription callback.
+
+```ts
+// One bus connection per instance, shared by all its sockets.
+// `bus` here stands in for a Redis/NATS/Kafka client.
+const channel = 'room:general';
+
+// When a local client sends, publish — do NOT loop sockets here.
+function onClientMessage(text: string, fromUserId: string) {
+  bus.publish(channel, JSON.stringify({ fromUserId, text }));
+}
+
+// Every instance runs this once at startup.
+bus.subscribe(channel, (raw: string) => {
+  const msg = JSON.parse(raw) as { fromUserId: string; text: string };
+  // Fan out to THIS instance's local clients only.
+  for (const conn of connections.values()) {
+    if (conn.rooms.has('general')) {
+      conn.socket.send(raw);
+    }
+  }
+});
+```
+
+Notice `onClientMessage` never touches `connections`. It cannot accidentally double-send or miss remote clients, because it does not deliver at all — it only publishes. Delivery is entirely the subscriber's job, and every instance runs the same subscriber.
+
+## Which bus? Redis, NATS, or Kafka
+
+All three carry messages between instances; they differ in what guarantees they add.
+
+- **Redis pub/sub** — the common default. Dead simple, very low latency, *fire-and-forget*: if an instance is not subscribed at the moment a message is published, it never sees it. Perfect for live chat and presence where a missed in-flight message is no tragedy.
+- **NATS** — purpose-built lightweight messaging, similar fire-and-forget core, with optional persistence (JetStream) when you want replay.
+- **Kafka** — a durable, ordered, replayable log. Heavier to run, but messages are retained, so a restarting instance can catch up on what it missed. Reach for it when the events also need to be stored, audited, or consumed by other systems.
+
+For pure real-time fan-out, Redis pub/sub is usually the right first choice; you graduate to NATS or Kafka when you need persistence, ordering, or replay.
+
+## See two instances share one bus
+
+The demo below simulates the whole pattern in your browser: one shared in-memory bus and two server instances, each holding its own local clients. Watch the order in the log — the message is published once, then both instances fan out, and a client on the *other* instance receives it. That is the cross-instance gap, closed.
+
+export const backplaneDemo = `(function () {
+  // A tiny in-page pub/sub bus — stands in for Redis/NATS/Kafka.
+  // Fire-and-forget: it just calls every current subscriber.
+  class Bus {
+    constructor() { this.subs = {}; }
+    subscribe(channel, fn) {
+      (this.subs[channel] = this.subs[channel] || []).push(fn);
+    }
+    publish(channel, payload) {
+      (this.subs[channel] || []).forEach((fn) => fn(payload));
+    }
+  }
+
+  // A fake client: just remembers what it was delivered.
+  class Client {
+    constructor(name) { this.name = name; }
+    deliver(text) { console.log('   -> ' + this.name + ' received: "' + text + '"'); }
+  }
+
+  // A server instance: holds local clients, talks to the shared bus.
+  class Instance {
+    constructor(name, bus) {
+      this.name = name;
+      this.bus = bus;
+      this.clients = [];
+      // Subscribe once: fan out to MY local clients only.
+      this.bus.subscribe('room:general', (raw) => {
+        const msg = JSON.parse(raw);
+        console.log('[' + this.name + '] bus delivered; fanning out to ' + this.clients.length + ' local client(s)');
+        this.clients.forEach((c) => c.deliver(msg.text));
+      });
+    }
+    addClient(client) { this.clients.push(client); }
+    // A local client sends: publish, do NOT loop sockets here.
+    onClientMessage(text) {
+      console.log('[' + this.name + '] received from a local client; publishing to bus');
+      this.bus.publish('room:general', JSON.stringify({ text: text }));
+    }
+  }
+
+  const bus = new Bus();
+  const a = new Instance('Instance A', bus);
+  const b = new Instance('Instance B', bus);
+
+  a.addClient(new Client('client-1 (on A)'));
+  a.addClient(new Client('client-2 (on A)'));
+  b.addClient(new Client('client-3 (on B)'));
+  b.addClient(new Client('client-4 (on B)'));
+
+  console.log('client-1 posts a message on Instance A:');
+  a.onClientMessage('hello everyone');
+
+  console.log('');
+  console.log('Both instances fanned out — clients on A AND B received it.');
+})();`;
+
+<NodeRunner client:visible code={backplaneDemo} />
+
+The log proves the point: client-1's message was published once on instance A, the bus handed it to *both* subscribers, and clients 3 and 4 on instance B received it even though instance A never saw their sockets. Swap the in-page `Bus` for a real Redis client and this exact shape runs across machines.
+
+<Callout title="The mental model">
+Stop thinking "send to all clients" and start thinking "publish an event, then each instance delivers to its own". The backplane turns one unreachable broadcast into many local broadcasts, one per instance — and because the publisher is also a subscriber, you write the delivery logic only once.
+</Callout>
+
+export const quizBackplane = [
+  {
+    q: 'In the backplane pattern, what does an instance do the moment a local client sends a message?',
+    options: [
+      'Loop over its local sockets and deliver immediately',
+      'Publish the message to a shared channel without delivering it itself',
+      'Forward the raw socket to the other instance',
+      'Write the message to a database and poll for it',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is there no special “also send to my own clients” branch in the publish handler?',
+    options: [
+      'Local clients are delivered by the database',
+      'The publishing instance is also a subscriber, so it receives and fans out like any other',
+      'The bus echoes messages straight to sockets',
+      'Local clients poll for new messages separately',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When would you pick Kafka over Redis pub/sub for the backplane?',
+    options: [
+      'When you want the absolute lowest latency and simplest setup',
+      'When missed in-flight messages are acceptable',
+      'When you need durability, ordering, or replay so restarting instances can catch up',
+      'When you have only a single instance',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="scaling-and-pubsub/pubsub-backplane" questions={quizBackplane} />
+
+<ProgressTracker client:visible id="scaling-and-pubsub/pubsub-backplane" />

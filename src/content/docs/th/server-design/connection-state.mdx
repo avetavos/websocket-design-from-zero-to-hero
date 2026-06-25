@@ -1,0 +1,184 @@
+---
+title: 'Connection State'
+description: 'การแนบ state ต่อ connection — user id, subscriptions — ให้แต่ละ socket และ clean up มันอย่างน่าเชื่อถือตอน close พร้อมเดโม Node ws ที่รันได้จริง'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+socket เปล่า ๆ นั้นไร้ตัวตน server รู้ว่ามี client *รายหนึ่ง* เชื่อมต่ออยู่ แต่ไม่รู้ว่าพวกเขาเป็น **ใคร** หรือสนใจอะไร แอปพลิเคชันจริงต้องตอบคำถามอย่าง "นี่คือ user คนไหน?" และ "พวกเขา subscribe อะไรไว้บ้าง?" — และคำตอบต้องเดินทางไปกับ connection ตลอดอายุของมัน นั่นคือ **per-connection state**
+
+## ทำไม state ต้องอยู่ที่ไหนสักแห่ง
+
+ใน HTTP คุณสร้าง context ขึ้นใหม่ในทุก request จาก token หรือ session cookie เพราะแต่ละ request เป็นอิสระต่อกัน WebSocket ตรงกันข้าม: หนึ่ง connection ที่มีชีวิตยืนยาว ดังนั้นคุณจึงอยากแก้คำถาม "นี่ใคร" **หนึ่งครั้ง** ตอน connect แล้วเก็บไว้ สิ่งทั่วไปที่คุณแนบเข้าไป:
+
+- **Identity** — user id ที่แก้มาจาก token บน upgrade request
+- **Subscriptions** — room, channel, หรือ topic ใดที่ socket นี้ต้องการ
+- **Bookkeeping** — เวลาที่พวกเขาเชื่อมต่อ, ครั้งล่าสุดที่คุณได้ยินจากพวกเขา (สำหรับ heartbeat), counter ต่อ socket
+
+ที่ตามธรรมชาติสำหรับวางทั้งหมดนี้คือ *บนตัว socket object เอง* เพื่อว่าที่ไหนก็ตามที่คุณมี `ws` คุณก็มี context ของมัน
+
+## การแนบ state ให้ socket
+
+pattern ที่ง่ายที่สุดคือแขวน object ธรรมดาไว้บน socket เมื่อ connection เปิด อ่าน identity จาก upgrade `req` แล้วเก็บอะไรก็ตามที่คุณต้องการ:
+
+```ts
+wss.on('connection', (ws, req) => {
+  // Resolve identity once, from the upgrade request (token, cookie, query…).
+  const userId = resolveUser(req); // your auth logic
+
+  // Attach a state bag to this specific socket.
+  ws.state = {
+    userId,
+    subscriptions: new Set(),
+    connectedAt: Date.now(),
+  };
+
+  ws.send(`hello ${userId}`);
+});
+```
+
+ตอนนี้ handler ใดก็ตามที่มี socket สามารถอ่าน `ws.state.userId` หรือตรวจ `ws.state.subscriptions` ได้ ทางเลือกที่สะอาดและ type-safe กว่าในแอปขนาดใหญ่คือ side-table — `Map` จาก socket ไปยัง state — ซึ่งหลีกเลี่ยงการ monkey-patch object ของไลบรารี:
+
+```ts
+const stateBySocket = new Map(); // ws -> { userId, subscriptions, ... }
+
+wss.on('connection', (ws, req) => {
+  stateBySocket.set(ws, {
+    userId: resolveUser(req),
+    subscriptions: new Set(),
+  });
+});
+```
+
+ทั้งสองวิธีใช้ได้ การแนบโดยตรงสะดวก; ส่วน side-table ทำให้ตัว socket object สะอาดและให้เหตุผลได้ง่ายเมื่อคุณต้องการ reverse lookup ด้วย (เช่น "หา socket ของ user 42")
+
+## การ mutate state เมื่อข้อความเข้ามา
+
+state ไม่ได้ถูกแช่แข็งไว้ตอน connect — มันวิวัฒน์ ข้อความ `subscribe` ควรเพิ่มเข้า set; ข้อความ `unsubscribe` ควรลบออกจากมัน:
+
+```ts
+ws.on('message', (data) => {
+  const msg = JSON.parse(data.toString());
+  if (msg.type === 'subscribe') {
+    ws.state.subscriptions.add(msg.channel);
+  } else if (msg.type === 'unsubscribe') {
+    ws.state.subscriptions.delete(msg.channel);
+  }
+});
+```
+
+set `subscriptions` ต่อ socket นี้คือเมล็ดพันธุ์ของ room ซึ่งบทเรียนถัดไปจะเพาะให้เติบโตเป็นระบบ broadcast เต็มรูปแบบ
+
+## Clean up ตอน close — เสมอ
+
+นี่คือกฎที่แยก server ที่แข็งแรงออกจาก server ที่รั่ว: **ทุก state ที่คุณสร้างตอน connect คุณต้องรื้อทิ้งตอน close** socket ที่ disconnect แต่ทิ้ง entry ของมันไว้ใน `Map` หรือทิ้ง id ของมันไว้ใน room set คือ memory leak และ bug ด้านความถูกต้อง — คุณอาจ broadcast ไปหา ghost
+
+<Mermaid title="วงจรชีวิตของ per-connection state" code={lifecycleDiagram} />
+
+export const lifecycleDiagram = `flowchart LR
+  CONN["connection<br/>(ws, req)"] --> CREATE["create state<br/>userId, subscriptions"]
+  CREATE --> LIVE["live: read & mutate<br/>on each message"]
+  LIVE --> CLOSE["close / error"]
+  CLOSE --> CLEAN["delete state<br/>remove from rooms"]
+  CLEAN --> GC["socket eligible<br/>for garbage collection"]`;
+
+ต่อ cleanup เข้ากับ **ทั้ง** `close` และ `error` เพราะ error มักจะมาก่อนการ disconnect แบบเงียบ ๆ:
+
+```ts
+function cleanup(ws) {
+  stateBySocket.delete(ws);
+  // also remove ws from any room sets it joined
+}
+
+ws.on('close', () => cleanup(ws));
+ws.on('error', () => cleanup(ws));
+```
+
+## ดู state ทำงานจริง
+
+เดโมด้านล่างเก็บ per-connection state (user id ที่ได้มาตอน connect บวกกับ subscription set), mutate มันบนข้อความ `subscribe`/`unsubscribe`, และพิมพ์บรรทัดรื้อถอนตอน close เปิดมันใน StackBlitz แล้วเชื่อมต่อ — บรรทัด client ที่ปรับแล้วระบุไว้ใน comment
+
+export const stateCode = `// Per-connection state, attached to this socket. ws/wss/req in scope.
+const userId = 'user-' + Math.floor(Math.random() * 1000);
+ws.state = { userId, subscriptions: new Set(), connectedAt: Date.now() };
+
+console.log(\`\${userId} connected\`);
+ws.send(JSON.stringify({ type: 'hello', userId }));
+
+ws.on('message', (data) => {
+  let msg;
+  try { msg = JSON.parse(data.toString()); }
+  catch { ws.send(JSON.stringify({ type: 'error', error: 'send JSON' })); return; }
+
+  if (msg.type === 'subscribe') {
+    ws.state.subscriptions.add(msg.channel);
+  } else if (msg.type === 'unsubscribe') {
+    ws.state.subscriptions.delete(msg.channel);
+  }
+  ws.send(JSON.stringify({
+    type: 'state',
+    userId: ws.state.userId,
+    subscriptions: [...ws.state.subscriptions],
+  }));
+});
+
+// Tear down on BOTH close and error so nothing leaks.
+function cleanup() {
+  console.log(\`\${ws.state.userId} disconnected — clearing state\`);
+  ws.state.subscriptions.clear();
+}
+ws.on('close', cleanup);
+ws.on('error', cleanup);
+
+// Try sending: {"type":"subscribe","channel":"news"} from the client.`;
+
+<NodeRunner node client:visible code={stateCode} />
+
+ทุกการตอบกลับ echo รายการ subscription ปัจจุบันของ socket — state ที่คงอยู่ข้ามข้อความและเป็นของ connection หนึ่งนั้น เมื่อ client disconnect บรรทัด `cleanup` พิสูจน์ว่าการรื้อถอนได้รันแล้ว รักษาวินัยนั้นไว้แล้ว memory ของ server ของคุณจะถูกจำกัดขอบเขตไม่ว่าจะมี client เข้าออกมากแค่ไหน
+
+<Callout title="state เข้า, state ออก">
+แก้ identity **หนึ่งครั้ง** ตอน connect แล้วแนบ state (user id, subscriptions) เข้ากับ socket หรือ side-table `Map` mutate มันเมื่อข้อความเข้ามา — และลบ **ทุก** ชิ้นส่วนของมันออกตอน `close` *และ* `error` state ที่ไม่ได้ clean up คือ memory leak และเป็นต้นตอของ ghost broadcast
+</Callout>
+
+export const quizState = [
+  {
+    q: 'ทำไมต้องแก้ identity ของ connection หนึ่งครั้งตอน connect แทนที่จะแก้ในทุกข้อความ?',
+    options: [
+      'เพราะ socket อนุญาตข้อความเดียวเท่านั้น',
+      'เพราะ connection มีชีวิตยืนยาว จึงเก็บ context ไว้ได้แทนที่จะสร้างใหม่ทุกครั้ง',
+      'เพราะข้อความไม่สามารถพก token ได้',
+      'เพราะ ws.send ช้ากว่าการอ่าน header',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'อันตรายของการ NOT clean up per-connection state ตอน close คืออะไร?',
+    options: [
+      'client ไม่สามารถ reconnect ได้',
+      'entry ค้างทำให้ memory รั่วและอาจทำให้ broadcast ไปหา ghost connection',
+      'port ของ server เปลี่ยน',
+      'TLS certificate หมดอายุ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมต้องต่อ cleanup handler เข้ากับทั้ง `close` และ `error`?',
+    options: [
+      'error ไม่เคยทำให้ socket disconnect',
+      'error มักจะมาก่อนการ disconnect แบบเงียบ ๆ ดังนั้นทั้งสองเส้นทางต้องปล่อย state',
+      'close และ error เป็น event เดียวกัน',
+      'มันทำให้ความเร็ว connection เพิ่มเป็นสองเท่า',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-design/connection-state" questions={quizState} />
+
+<ProgressTracker client:visible id="server-design/connection-state" />

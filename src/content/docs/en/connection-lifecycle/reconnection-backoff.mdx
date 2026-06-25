@@ -1,0 +1,174 @@
+---
+title: 'Reconnection & Backoff'
+description: 'Auto-reconnecting with exponential backoff, jitter, and a cap so you heal without hammering a struggling server — with a live demo logging the growing delays.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+You can now *detect* a dead connection. The natural reflex is to reconnect immediately. That reflex, multiplied across thousands of clients, is how you turn a brief server blip into a full outage. This lesson is about reconnecting in a way that heals your client **without** kicking your server while it is down.
+
+## Why "just reconnect" is dangerous
+
+Imagine a server restarts and drops ten thousand connections at once. If every client retries instantly, then retries instantly again on failure, the server is hit by ten thousand connection attempts every few milliseconds the moment it tries to come back. It collapses under the reconnect storm before it can even finish booting. This is the **thundering herd**, and a naive `while (failed) reconnect()` loop is its engine.
+
+The fix has three ingredients, and you want all three:
+
+- **Exponential backoff** — wait longer after each failure, not the same short interval.
+- **Jitter** — randomize the wait so clients do not all retry in lockstep.
+- **A cap** — stop the delay from growing to absurd lengths.
+
+## Exponential backoff
+
+Instead of retrying every second forever, double the delay each time you fail: 1s, 2s, 4s, 8s, 16s... The math is just a base delay times two raised to the attempt number:
+
+```ts
+const BASE_MS = 1000;
+const CAP_MS = 30000;
+
+function backoffDelay(attempt: number): number {
+  const exponential = BASE_MS * Math.pow(2, attempt);
+  return Math.min(exponential, CAP_MS); // never wait longer than the cap
+}
+```
+
+The **cap** matters as much as the growth. Without it, after a dozen failures you would be waiting *hours* between attempts, and a user who reopens their laptop would sit forever staring at a disconnected app. A cap of, say, 30 seconds means a recovered server is found again quickly even after a long outage.
+
+## Jitter — the ingredient everyone forgets
+
+Backoff alone solves the *frequency* problem but not the *synchronization* problem. If all ten thousand clients were dropped at the same instant and all use the same backoff schedule, they will all wait 1s, then all 2s, then all 4s — retrying in perfectly synchronized waves that hammer the server in pulses just as bad as the original storm.
+
+**Jitter** breaks the synchronization by adding randomness to each delay. A simple and effective form is "full jitter": pick a random delay anywhere between zero and the computed backoff.
+
+```ts
+function jittered(attempt: number): number {
+  const ceiling = backoffDelay(attempt);
+  return Math.random() * ceiling; // full jitter: 0..ceiling
+}
+```
+
+Now clients spread their retries smoothly across each window instead of slamming the server in unison. Jitter is cheap, one line, and the single most important thing separating a polite reconnect from a self-inflicted DDoS.
+
+## The reconnect loop as a state machine
+
+<Mermaid title="Reconnect with capped exponential backoff and jitter" code={backoffDiagram} />
+
+export const backoffDiagram = `stateDiagram-v2
+  [*] --> Connected
+  Connected --> Disconnected: drop detected
+  Disconnected --> Waiting: compute min(base*2^n, cap), apply jitter
+  Waiting --> Connecting: delay elapsed
+  Connecting --> Connected: success, reset attempt to 0
+  Connecting --> Disconnected: failed, attempt += 1
+  Connected --> [*]: closed on purpose`;
+
+Two details make or break this loop. First, **reset the attempt counter to zero on a successful connect** — otherwise a connection that succeeds and later drops would start its next backoff from the huge delay it ended on. Second, **stop entirely on a deliberate close** so you do not fight a user who chose to disconnect.
+
+## Watch the delays grow
+
+The demo below uses an in-page socket with the real `WebSocket` API. The mock is configured to *drop* — it fires `onclose` with the abnormal code 1006 shortly after each open — for the first several attempts, then finally stays up. The reconnect loop logs the capped, jittered delay it waits before each attempt so you can watch backoff in action.
+
+export const backoffCode = `(function () {
+  // In-page socket with the real WebSocket API. This mock DROPS (onclose with
+  // code 1006) a few times before finally staying connected, so we can watch a
+  // reconnect loop back off. In a real app: const ws = new WebSocket('wss://...').
+  let globalAttempt = 0;
+  class DroppingSocket {
+    constructor() {
+      this.readyState = 0;
+      globalAttempt += 1;
+      const willDrop = globalAttempt <= 4; // succeed on the 5th attempt
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+        if (willDrop) {
+          setTimeout(() => {
+            this.readyState = 3;
+            if (this.onclose) this.onclose({ code: 1006, wasClean: false });
+          }, 40);
+        }
+      }, 20);
+    }
+    close(code) { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000, wasClean: true }); }
+  }
+
+  const BASE_MS = 100;   // small base so the demo runs fast
+  const CAP_MS = 1200;
+  let attempt = 0;
+
+  function delayFor(n) {
+    const exp = Math.min(BASE_MS * Math.pow(2, n), CAP_MS); // capped exponential
+    return Math.round(Math.random() * exp);                 // full jitter
+  }
+
+  function connect() {
+    console.log('connecting (attempt ' + (attempt + 1) + ')...');
+    const ws = new DroppingSocket();
+    ws.onopen = () => console.log('  open');
+    ws.onclose = (event) => {
+      if (event.wasClean) { console.log('  closed cleanly, code', event.code); return; }
+      const wait = delayFor(attempt);
+      console.log('  dropped (code ' + event.code + ') — backing off ' + wait + 'ms before retry');
+      attempt += 1;
+      setTimeout(() => {
+        if (attempt > 4) {
+          // The 5th connection stays up — reset the counter and finish.
+          console.log('reconnected and stable — resetting attempt counter to 0');
+          attempt = 0;
+        }
+        connect();
+      }, wait);
+    };
+  }
+  connect();
+})();`;
+
+<NodeRunner client:visible code={backoffCode} />
+
+Watch the `backing off ...ms` numbers climb roughly 100, 200, 400, 800 — capped and randomized by jitter, so they will not be exact powers of two — and then the connection finally holds and the attempt counter resets. That growing, randomized, capped delay is the difference between a client that helps a recovering server and one that buries it.
+
+<Callout title="Reconnection in one line">
+Never reconnect in a tight loop. Wait longer after each failure (**exponential backoff**), randomize each wait (**jitter**), never exceed a sensible ceiling (**a cap**), reset the counter on success, and stop on a deliberate close.
+</Callout>
+
+export const quizBackoff = [
+  {
+    q: 'Why is reconnecting instantly in a tight loop dangerous?',
+    options: [
+      'It uses too much battery on the server',
+      'Thousands of clients retrying at once create a thundering herd that can prevent a server from recovering',
+      'The WebSocket protocol bans fast reconnects',
+      'Instant reconnects are always rejected by browsers',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What problem does jitter specifically solve that backoff alone does not?',
+    options: [
+      'It encrypts the reconnect attempts',
+      'It de-synchronizes clients so they do not all retry in the same waves',
+      'It makes the delays grow faster',
+      'It removes the need for a cap',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why must you reset the attempt counter to zero after a successful connect?',
+    options: [
+      'To comply with TLS requirements',
+      'So a later drop starts backing off from a short delay again instead of the huge delay it had reached',
+      'Because the counter overflows otherwise',
+      'You should never reset it',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/reconnection-backoff" questions={quizBackoff} />
+
+<ProgressTracker client:visible id="connection-lifecycle/reconnection-backoff" />

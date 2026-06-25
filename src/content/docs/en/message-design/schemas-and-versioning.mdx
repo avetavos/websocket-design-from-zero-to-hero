@@ -1,0 +1,156 @@
+---
+title: 'Schemas and Versioning'
+description: 'A message envelope with type, version and payload; validating what arrives; and evolving a live protocol additively without breaking older clients. With a runnable demo.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+A real WebSocket app is never deployed once. The server ships fixes; clients update on their own schedule; an old mobile build keeps talking to a new server for *months*. Your message protocol has to survive that churn — and the two ideas that make it survivable are a **message envelope** and a **version field**.
+
+## The envelope
+
+Rather than letting every message be an arbitrary shape, agree on a consistent outer structure — an **envelope** — and put the message-specific data inside it:
+
+- **`type`** — what kind of message this is (the dispatch key from the framing lesson).
+- **`v`** — the protocol/schema version this message conforms to.
+- **`payload`** — the actual data, the part that varies by `type`.
+
+Every message, in both directions, looks the same on the outside. Routing code reads `type`, compatibility code reads `v`, and only the per-type handlers ever touch `payload`. A well-formed message reads like `{"type":"chat","v":1,"payload":{...}}`.
+
+<Mermaid title="A consistent envelope around varying payloads" code={envelopeDiagram} />
+
+export const envelopeDiagram = `flowchart LR
+  subgraph env["Envelope — same for every message"]
+    t["type: what"]
+    v["v: which version"]
+    p["payload: the varying data"]
+  end
+  t --> route["dispatch / routing"]
+  v --> compat["compatibility handling"]
+  p --> handler["per-type handler"]`;
+
+## Validate what arrives — never trust the wire
+
+Anything can arrive on a socket: a buggy client, an old build, a malformed or even malicious message. Before a handler touches a message, **validate the envelope**: it must parse as JSON, have a known `type`, carry a `v`, and contain the fields that `type` requires. Reject anything else with a clear error message rather than letting it crash a handler half-way through. In production you would do this with a schema library (Zod, Ajv/JSON Schema, or generated Protobuf validators); the principle is identical at any scale: **incoming data is untrusted until proven well-formed.**
+
+## Evolve additively
+
+Once clients are in the wild, you cannot change the meaning of an existing field — an old client still reads it the old way. The rule that keeps a protocol alive:
+
+- **Add, never repurpose.** New optional fields are safe; old clients ignore what they do not recognize, new clients read the extra data. *Removing* a field or *changing its meaning* breaks someone.
+- **Bump `v` for breaking changes.** When a change genuinely cannot be additive, raise the version and have the server support both `v` values during the migration window, branching on `v`.
+- **Default the missing.** When a new field is absent (an older client did not send it), the receiver supplies a sensible default instead of failing.
+
+These three habits let a v1 and a v2 client share the same server indefinitely.
+
+## A demo: validate, then evolve
+
+The demo validates every incoming envelope, then shows additive evolution in action: the server understands a **v1** `chat` message *and* a **v2** message that adds an optional `lang` field — handling both, and defaulting `lang` when an older client omits it. A deliberately malformed message is rejected, not crashed on. It runs on an in-page echo socket using the real `WebSocket` API.
+
+export const schemaCode = `(function () {
+  // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 40); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  const KNOWN_TYPES = { chat: true, join: true };
+
+  // Validate the envelope before any handler runs.
+  function validate(raw) {
+    let msg;
+    try { msg = JSON.parse(raw); }
+    catch (e) { return { ok: false, error: 'not valid JSON' }; }
+    if (typeof msg !== 'object' || msg === null) return { ok: false, error: 'not an object' };
+    if (!KNOWN_TYPES[msg.type]) return { ok: false, error: 'unknown type: ' + msg.type };
+    if (typeof msg.v !== 'number') return { ok: false, error: 'missing version field v' };
+    if (!msg.payload) return { ok: false, error: 'missing payload' };
+    return { ok: true, msg: msg };
+  }
+
+  function handleChat(msg) {
+    // ADDITIVE EVOLUTION: v2 added an optional payload.lang. Older v1 messages omit it,
+    // so we default it. The same handler serves BOTH versions.
+    const lang = msg.payload.lang || 'en';
+    console.log('chat (v' + msg.v + ') [' + lang + ']:', msg.payload.text);
+  }
+
+  let processed = 0;
+  ws.onmessage = (event) => {
+    const result = validate(event.data);
+    if (!result.ok) {
+      console.log('REJECTED:', result.error); // never reaches a handler
+    } else if (result.msg.type === 'chat') {
+      handleChat(result.msg);
+    }
+    processed += 1;
+    if (processed === 3) ws.close();
+  };
+
+  ws.onopen = () => {
+    // 1) a v1 chat (no lang) — handler defaults lang to 'en'
+    ws.send(JSON.stringify({ type: 'chat', v: 1, payload: { text: 'hello' } }));
+    // 2) a v2 chat with the new optional lang field — same handler reads it
+    ws.send(JSON.stringify({ type: 'chat', v: 2, payload: { text: 'hola', lang: 'es' } }));
+    // 3) a malformed message — caught by validation, not by a crash
+    ws.send(JSON.stringify({ type: 'mystery', payload: {} }));
+  };
+
+  ws.onclose = () => console.log('done — v1 and v2 both handled, bad message safely rejected');
+})();`;
+
+<NodeRunner client:visible code={schemaCode} />
+
+The v1 message and the v2 message both flowed through the *same* `handleChat`, the new `lang` field appearing only where it was sent and defaulting to `en` where it was not — that is additive evolution working. The third message never reached a handler because validation stopped it at the door. Build those two habits in from day one and your protocol can grow for years without a flag day.
+
+<Callout title="The one-line takeaway">
+Wrap every message in a consistent **envelope** (`type` + `v` + `payload`), **validate** what arrives before any handler trusts it, and **evolve additively** — add optional fields and bump `v` for breaking changes — so old and new clients keep talking to the same server.
+</Callout>
+
+export const quizSchemas = [
+  {
+    q: 'What is the purpose of a message envelope?',
+    options: [
+      'To compress the payload before sending',
+      'To give every message a consistent outer shape — type, version, and payload — for routing and compatibility',
+      'To replace the WebSocket handshake',
+      'To encrypt the message contents',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why validate incoming messages before handling them?',
+    options: [
+      'Because the WebSocket already guarantees they are well-formed',
+      'Because any client — buggy, outdated, or malicious — can send malformed data, so it is untrusted until proven valid',
+      'Validation makes messages smaller',
+      'It is only needed for binary frames',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which change keeps an older client working against a newer server?',
+    options: [
+      'Renaming an existing field to something clearer',
+      'Adding a new optional field that old clients can safely ignore',
+      'Changing the meaning of an existing field',
+      'Removing a field the old client still reads',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/schemas-and-versioning" questions={quizSchemas} />
+
+<ProgressTracker client:visible id="message-design/schemas-and-versioning" />

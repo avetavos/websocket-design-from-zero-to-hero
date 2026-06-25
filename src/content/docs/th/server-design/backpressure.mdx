@@ -1,0 +1,158 @@
+---
+title: 'Backpressure'
+description: 'เมื่อ client ช้าตามไม่ทัน — ws.bufferedAmount, การ drop และ coalesce, flow control, send callback, และการปกป้อง memory ของ server'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+การ broadcast รู้สึกเหมือนฟรีจนกระทั่ง client หนึ่งดื่มไม่เร็วเท่าที่คุณริน โทรศัพท์บนเครือข่ายอ่อน, แท็บที่ OS throttle ไว้, แล็ปท็อปที่หลับไป — client เหล่านี้อ่านช้า และ server ที่เร็วของคุณก็เรียก `send` ต่อไป ข้อมูลที่ยังไม่ได้ส่งต้องไปอยู่ *ที่ไหนสักแห่ง* และที่นั่นคือ memory ของ server นี่คือ **backpressure** และการเพิกเฉยต่อมันคือวิธีที่ client ช้าตัวเดียวล้ม server ได้
+
+## byte ไปกองอยู่ที่ไหน
+
+`ws.send(data)` ไม่ block จนกว่า client จะรับข้อมูล — มันมอบ byte ให้ OS socket buffer แล้ว return ทันที ถ้า client อ่านช้า buffer นั้นจะเต็ม และข้อมูลที่ยังไม่ได้ส่งเพิ่มเติมจะ queue **อยู่ภายใน Node process ของคุณ** ส่ง byte ไปยัง client ที่ติดขัดใน loop แน่น ๆ แล้วคุณก็กำลังสร้าง in-memory queue ที่ไม่มีขอบเขตขึ้นมาอย่างแท้จริง:
+
+<Mermaid title="ผู้อ่านที่ช้าเปลี่ยนผู้ผลิตที่เร็วให้กลายเป็น memory queue ที่โตขึ้นเรื่อย ๆ" code={backpressureDiagram} />
+
+export const backpressureDiagram = `flowchart LR
+  PROD["server<br/>produces fast"] --> SEND["ws.send()"]
+  SEND --> BUF["per-socket send buffer<br/>(ws.bufferedAmount grows)"]
+  BUF -- "drains slowly" --> SLOW["slow client"]
+  BUF -. "if it keeps growing" .-> OOM["server memory exhausted"]`;
+
+อันตรายไม่ใช่ client ช้าตัวหนึ่ง — มันคือการที่ไม่มีอะไรหยุดยั้ง queue ไม่ให้โตขึ้นโดยไม่มีขอบเขต ทางแก้คือ **วัด** backlog และ **ตอบสนอง** เมื่อมันใหญ่เกินไป
+
+## การวัดด้วย bufferedAmount
+
+ทุก `ws` socket เปิดเผย `ws.bufferedAmount` — จำนวน byte ที่ถูก queue ไว้โดย `send` แต่ยังไม่ได้ flush ไปยัง OS มันคือมาตรวัด backpressure ของคุณ ก่อนส่งข้อมูลที่ไม่สำคัญ ให้ตรวจมัน:
+
+```ts
+const HIGH_WATER_MARK = 1 << 20; // 1 MiB of pending bytes
+
+function safeSend(ws, data) {
+  if (ws.bufferedAmount > HIGH_WATER_MARK) {
+    // This client is behind. Do not pile more on.
+    return false; // dropped
+  }
+  ws.send(data);
+  return true;
+}
+```
+
+เมื่อ `bufferedAmount` ข้ามเกณฑ์ของคุณ client ตามไม่ทัน และการเคลื่อนไหวที่ถูกต้องมักจะ **ไม่ใช่** "ส่งไปแหละ"
+
+## กลยุทธ์เมื่อ client ตามไม่ทัน
+
+สิ่งที่คุณทำที่ high-water mark ขึ้นอยู่กับข้อมูล:
+
+- **Drop.** สำหรับ feed สด (ราคา, telemetry, ตำแหน่ง cursor) การอัปเดตเก่าไร้ค่าทันทีที่มีตัวใหม่กว่า แค่ข้าม send นั้น client จะตามทันในข้อความถัดไป
+- **Coalesce.** แทนที่จะส่งทุก tick เก็บเฉพาะ state **ล่าสุด** ต่อ client แล้วส่งตัวนั้นเมื่อ buffer drain การอัปเดตราคาสิบรายการที่ queue ไว้ยุบรวมเป็นราคาปัจจุบันเดียว
+- **Disconnect.** ถ้า client ยังตามไม่ทันอย่างสิ้นหวังเกิน grace period ให้ปิด socket (เช่น code `1013`, "try again later") การ reconnect พร้อม snapshot ใหม่ดีกว่า buffer ที่โตขึ้นไม่หยุด
+- **Flow control.** สำหรับข้อมูลที่คุณ drop ไม่ได้ (การ transfer ไฟล์) หยุดการผลิตจนกว่า buffer จะ drain — ให้ผู้บริโภคที่ช้ากำหนดจังหวะ
+
+หลักการที่รวมเป็นหนึ่ง: **bound the memory** ไม่ว่าคุณจะเลือกอะไร queue สำหรับ client หนึ่งคนใดก็ตามต้องมีเพดาน
+
+## send callback
+
+`ws.send` รับ callback ที่ fire เมื่อข้อมูลถูกส่งมอบแล้ว (หรือเกิด error) มันคือสัญญาณต่อข้อความที่คุณใช้กำหนดจังหวะผู้ผลิตได้ — queue chunk ถัดไปก็ต่อเมื่อตัวก่อนหน้าถูก flush แล้วเท่านั้น:
+
+```ts
+function pump(ws, chunks, i = 0) {
+  if (i >= chunks.length) return;
+  if (ws.readyState !== ws.OPEN) return;
+  ws.send(chunks[i], (err) => {
+    if (err) return; // socket gone
+    // Only schedule the next chunk once this one has drained.
+    if (ws.bufferedAmount < (1 << 20)) pump(ws, chunks, i + 1);
+    else setTimeout(() => pump(ws, chunks, i + 1), 50);
+  });
+}
+```
+
+นี่คือสิ่งเทียบเท่ากับการเคารพ `drain` event ของ stream ในโลก WebSocket: อย่าล้ำหน้าผู้บริโภคที่ช้าที่สุดเกินกว่าจำนวนที่มีขอบเขต
+
+## ดู client ช้าค่อย ๆ ถูกถม
+
+เดโมด้านล่างจำลองผู้ผลิตที่ผลิตในอัตราสูงซึ่งตรวจ `bufferedAmount` ก่อน send แต่ละครั้ง มัน drop การอัปเดตเมื่อ buffer (ที่จำลอง) เกินขีดจำกัด และรายงานว่าส่งไปกี่ตัวเทียบกับ drop ไปกี่ตัว — พฤติกรรมแบบเป๊ะ ๆ ที่ feed จริงต้องการ
+
+export const backpressureCode = `// Backpressure-aware producer. ws/wss/req in scope.
+const HIGH_WATER = 64 * 1024; // 64 KiB ceiling for this demo
+let sent = 0, dropped = 0, seq = 0;
+
+ws.send(JSON.stringify({ type: 'hello', note: 'streaming updates with backpressure guard' }));
+
+const timer = setInterval(() => {
+  if (ws.readyState !== ws.OPEN) { clearInterval(timer); return; }
+  seq += 1;
+  const update = JSON.stringify({ type: 'tick', seq, value: Math.random() });
+
+  // The real backpressure check: how much have we queued but not flushed?
+  if (ws.bufferedAmount > HIGH_WATER) {
+    dropped += 1; // client is behind — drop this stale update
+  } else {
+    ws.send(update);
+    sent += 1;
+  }
+
+  if (seq % 20 === 0) {
+    console.log(\`seq=\${seq} sent=\${sent} dropped=\${dropped} buffered=\${ws.bufferedAmount}\`);
+  }
+  if (seq >= 200) {
+    clearInterval(timer);
+    ws.send(JSON.stringify({ type: 'done', sent, dropped }));
+  }
+}, 5);
+
+// Stop producing the moment the client leaves — no orphaned timers.
+ws.on('close', () => clearInterval(timer));
+ws.on('error', () => clearInterval(timer));`;
+
+<NodeRunner node client:visible code={backpressureCode} />
+
+client ที่สุขภาพดี drain เร็วพอจน `bufferedAmount` อยู่ใกล้ศูนย์และแทบไม่มีอะไรถูก drop ลองหน่วงผู้บริโภคแล้วคุณจะเห็น `dropped` ไต่ขึ้นขณะที่ memory ยังคงราบเรียบ — ซึ่งคือประเด็นทั้งหมด สังเกต `clearInterval` ตอน `close`: ผู้ผลิตที่กำพร้าซึ่งยังรันต่อหลังจาก client จากไปแล้วก็เป็น leak ชนิดหนึ่งในแบบของมันเอง การปกป้อง memory ของ server คือความรับผิดชอบสุดท้ายของ WebSocket server และเป็นตัวตัดสินว่ามันจะรอดวันที่เครือข่ายแย่หรือไม่
+
+<Callout title="bound buffer ของทุก client">
+`ws.send` return ทันทีและ queue byte ที่ยังไม่ได้ส่งไว้ใน process ของคุณ — client ที่ช้าทำให้ queue นั้นโตขึ้นโดยไม่มีขีดจำกัด เฝ้าดู `ws.bufferedAmount` และที่ high-water mark ให้ **drop** การอัปเดตที่เก่าค้าง, **coalesce** ให้เหลือตัวล่าสุด, ใช้ **flow control** ผ่าน send callback, หรือ **disconnect** client ที่หมดหวัง เป้าหมายคือ buffer ต่อ client ที่มีขอบเขตเสมอ เพื่อให้ผู้อ่านที่ช้าตัวเดียวไม่มีวันทำให้ memory ของ server หมดได้
+</Callout>
+
+export const quizBackpressure = [
+  {
+    q: '`ws.bufferedAmount` บอกอะไรคุณ?',
+    options: [
+      'มี client เชื่อมต่ออยู่กี่ราย',
+      'จำนวน byte ที่ถูก queue โดย send แต่ยังไม่ได้ flush ไปยัง socket',
+      'จำนวนข้อความที่ได้รับทั้งหมด',
+      'latency ของ connection เป็นมิลลิวินาที',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม client ช้าจึงเป็นความเสี่ยงด้าน memory สำหรับ server?',
+    options: [
+      'มันเปิด connection มากเกินไป',
+      'send return ทันทีและ byte ที่ยังไม่ได้ส่ง queue อยู่ใน process ของ server โดยโตขึ้นไม่มีขอบเขต',
+      'มัน encrypt ข้อมูลสองครั้ง',
+      'มันบังคับให้ server ต้อง poll',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'สำหรับ price feed สด กลยุทธ์ใดเหมาะกับ client ที่ตามไม่ทัน?',
+    options: [
+      'Buffer ทุก tick ตลอดไปเพื่อไม่ให้สูญหายสักตัว',
+      'Drop หรือ coalesce ให้เหลือค่าล่าสุด เพราะ tick เก่าไร้ค่า',
+      'ส่ง history ทั้งหมดซ้ำในทุก tick',
+      'สลับ client ไปใช้ HTTP polling',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-design/backpressure" questions={quizBackpressure} />
+
+<ProgressTracker client:visible id="server-design/backpressure" />

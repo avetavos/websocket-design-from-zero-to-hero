@@ -1,0 +1,125 @@
+---
+title: 'Authorization'
+description: 'Authenticate the connection once, then authorize every message against the connection’s real identity — never the user the client claims to be.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In the last lesson we settled *who is on the connection*. This lesson is about the much larger question that follows: *is this particular message allowed?* Authentication happens **once**; authorization happens **every single message**. Conflating the two is one of the most common and most expensive WebSocket bugs.
+
+## Authenticate once, authorize every action
+
+An HTTP API re-checks permission on each request almost by accident — each request is separate, so each one runs through your middleware. A WebSocket connection breaks that habit. After the handshake, a hundred messages arrive over **one** authenticated connection, and it is tempting to think "this connection is logged in, so its messages are fine."
+
+They are not. *Logged in* is not *allowed*. A user authenticated as `alice` may send:
+
+```json
+{ "type": "delete", "room": "admins", "messageId": "42" }
+```
+
+Whether `alice` may delete that message has nothing to do with whether `alice` is authenticated — it depends on `alice`'s role, her membership in that room, and her relationship to that specific message. That decision must be made fresh, server-side, on arrival.
+
+## Never trust the client's claimed identity
+
+Here is the cardinal sin, and it is everywhere. The message above might instead arrive as:
+
+```json
+{ "type": "delete", "user": "admin", "room": "admins", "messageId": "42" }
+```
+
+A naive server reads `msg.user` and thinks "ah, an admin asked." But the client *wrote that field*. A client can claim to be anyone. The only trustworthy identity is the one **your server pinned to the connection at the handshake** — `ws.user` from the previous lesson — established from a validated credential the client could not forge.
+
+So the rule is blunt: **ignore any identity in the message body.** Authorize against `ws.user`, the value you set, never against a `user`/`role`/`isAdmin` field the client supplied. If the client could write it, it is a claim, not a fact.
+
+<Mermaid title="Per-message authorization against the connection’s pinned identity" code={authzDiagram} />
+
+export const authzDiagram = `flowchart TB
+  M["Incoming message<br/>(may CLAIM a user/role)"] --> I["Ignore claimed identity"]
+  I --> ID["Use ws.user — pinned at handshake"]
+  ID --> P{"Is ws.user allowed<br/>to do THIS action<br/>on THIS resource?"}
+  P -- "yes" --> A["Perform action"]
+  P -- "no" --> D["Reject: error frame<br/>(or close on abuse)"]`;
+
+## A runnable per-message authorization demo
+
+The demo below is the body of a `ws` connection handler. The handshake has already pinned an identity to the socket — here we hard-code `ws.user` and a role table to keep the demo self-contained. Then **every** incoming message is authorized: we look up the *real* role of `ws.user`, and we deliberately **ignore** any `user` field the client sends. A `delete` is allowed only for admins; a `post` is allowed for everyone. Open it in StackBlitz and have the client send different message types.
+
+export const authzServerCode = `// Body of wss.on('connection', (ws, req) => { ... }). ws/wss/req in scope.
+// Handshake already authenticated this socket. Pin the REAL identity here:
+ws.user = 'alice';                       // came from a validated credential
+const ROLES = { alice: 'member', bob: 'admin' };
+
+function can(user, action) {
+  const role = ROLES[user] || 'guest';   // look up the REAL role server-side
+  if (action === 'post') return true;    // anyone authenticated may post
+  if (action === 'delete') return role === 'admin';
+  return false;
+}
+
+ws.on('message', (data) => {
+  let msg;
+  try { msg = JSON.parse(data.toString()); }
+  catch { ws.send(JSON.stringify({ type: 'error', reason: 'bad json' })); return; }
+
+  // Authorize against ws.user — the pinned identity — NOT msg.user.
+  // Even if the client sends { user: 'admin' }, we never read it.
+  if (!can(ws.user, msg.type)) {
+    console.log(\`DENY \${ws.user} -> \${msg.type} (claimed user: \${msg.user})\`);
+    ws.send(JSON.stringify({ type: 'error', reason: 'forbidden', action: msg.type }));
+    return;
+  }
+
+  console.log(\`ALLOW \${ws.user} -> \${msg.type}\`);
+  ws.send(JSON.stringify({ type: 'ok', action: msg.type }));
+});`;
+
+<NodeRunner node client:visible code={authzServerCode} />
+
+Because `ws.user` is `alice`, a `member`, a `post` is allowed but a `delete` is denied — **even if the client adds `"user": "admin"` to the message**, because the server never reads that field. Flip `ws.user` to `'bob'` and the `delete` is allowed. That is the whole discipline: identity comes from the connection, permission is recomputed per message, and the message body is treated as a request, not as a source of truth.
+
+<Callout title="The connection knows who you are; the message does not">
+Authenticate **once** at the handshake and pin the identity to the socket. Authorize **every** message against that pinned identity — never against a user or role the client put in the payload. A client can claim to be anyone; only the server-side identity is real.
+</Callout>
+
+export const quizAuthz = [
+  {
+    q: 'How often must authorization run on a WebSocket connection?',
+    options: [
+      'Once, at the handshake — the connection is then trusted',
+      'On every message/action, against the connection’s pinned identity',
+      'Only on messages that change data',
+      'Never — authentication is enough',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A client sends { "type": "delete", "user": "admin" }. What should the server authorize against?',
+    options: [
+      'The "user": "admin" field in the message',
+      'ws.user — the identity pinned to the connection at the handshake',
+      'The Origin header',
+      'Whichever identity is more privileged',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is authenticating the connection not sufficient to allow an action?',
+    options: [
+      'Because tokens always expire instantly',
+      'Because being logged in says who you are, not whether this specific action on this resource is permitted',
+      'Because WebSockets cannot carry identity',
+      'Because the Origin must be rechecked per message',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="security/authorization" questions={quizAuthz} />
+
+<ProgressTracker client:visible id="security/authorization" />

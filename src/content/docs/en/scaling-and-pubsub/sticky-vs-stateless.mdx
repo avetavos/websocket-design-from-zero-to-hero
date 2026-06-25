@@ -1,0 +1,129 @@
+---
+title: 'Sticky vs Stateless'
+description: 'Route a client back to its instance with sticky sessions, or let any instance serve it from shared state — plus L4/L7 load balancer config, upgrade headers, and the trade-offs.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+You have a backplane fanning messages out and a shared store tracking presence. One question remains, and the load balancer is where it gets answered: when a client connects — or *re*connects — which instance should handle it? There are two philosophies, and they push your architecture in opposite directions.
+
+## Two answers to "which instance?"
+
+- **Sticky sessions.** The load balancer pins each client to one instance and routes it back there every time. The instance can then keep meaningful state in memory, because the same client always returns to the same place.
+- **Stateless.** Any instance can serve any client. No instance holds state that matters — everything important lives in the shared store and rides the backplane — so the balancer is free to route a connection anywhere.
+
+<Mermaid title="Sticky pins a client to its instance; stateless routes anywhere over shared state" code={stickyDiagram} />
+
+export const stickyDiagram = `flowchart TB
+  subgraph sticky["Sticky sessions"]
+    ls["Load balancer (affinity)"]
+    ls -- "client X -> always" --> sa["Instance A (holds X's state)"]
+    ls -. "never" .-x sb["Instance B"]
+  end
+  subgraph stateless["Stateless"]
+    lt["Load balancer (any instance)"]
+    lt --> ta["Instance A"]
+    lt --> tb["Instance B"]
+    ta <--> store[["Shared store + backplane"]]
+    tb <--> store
+  end`;
+
+## The handshake the balancer must not break
+
+Whichever model you pick, the balancer has one non-negotiable job: a WebSocket starts life as an HTTP request carrying special headers, and that **upgrade** must survive the proxy.
+
+A WebSocket handshake is an HTTP `GET` with:
+
+- `Connection: Upgrade`
+- `Upgrade: websocket`
+
+A balancer or proxy that strips or ignores these headers turns the handshake into a plain HTTP request, and the connection fails before any message is sent. Two practical consequences:
+
+- The proxy must operate in a mode that **forwards the upgrade** rather than terminating it as ordinary HTTP.
+- WebSockets have no requests after the handshake, so **idle/read timeouts** must be long (or disabled) — otherwise the proxy closes a perfectly healthy but quiet connection.
+
+```nginx
+# nginx: forward the upgrade and don't time out a quiet socket.
+location /ws {
+  proxy_pass http://ws_backend;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;        # pass the Upgrade header
+  proxy_set_header Connection "upgrade";         # pass the Connection header
+  proxy_read_timeout 3600s;                      # tolerate long idle gaps
+}
+```
+
+## L4 versus L7
+
+*Where* in the stack the balancer works changes what it can do.
+
+- **L4 (transport / TCP).** The balancer forwards raw TCP and never reads HTTP. It cannot see headers or cookies, so it is fast and naturally upgrade-safe — there is no HTTP layer to break. Affinity is by client IP or connection. Cheap and simple, but blind to anything above TCP.
+- **L7 (application / HTTP).** The balancer understands HTTP, so it can route by path, set cookies, and read the upgrade headers. That power is also the risk: an L7 proxy that is not configured for WebSockets is exactly the one that strips the upgrade. Done right, L7 gives you cookie-based stickiness and per-route control; done wrong, it silently breaks the handshake.
+
+A common pattern is L4 for raw throughput and simplicity, or a correctly configured L7 when you need cookie affinity or path-based routing.
+
+## How stickiness is actually pinned
+
+- **IP hash (L4 or L7).** Route by a hash of the client IP. Simple, but mobile clients change IP and many users can hide behind one NAT, skewing load.
+- **Cookie affinity (L7).** The balancer sets a cookie naming the instance and honors it on reconnect. More precise than IP, but requires an L7 proxy that handles the upgrade correctly.
+
+## The trade-off
+
+| | Sticky sessions | Stateless |
+| --- | --- | --- |
+| In-memory per-client state | Allowed — client returns to it | Avoid — lives in shared store |
+| Lost on instance death | That client's local state | Nothing instance-specific |
+| Load rebalancing | Hard — clients are pinned | Easy — route anywhere |
+| Deploys / autoscaling | Disruptive to pinned clients | Smooth |
+| Backplane needed for broadcast | Yes | Yes |
+
+The honest summary: stickiness buys you the convenience of trusting in-memory state, at the cost of flexibility and graceful failure. Stateless costs you more upfront — every meaningful fact must go to the shared store and the backplane — but it scales, deploys, and recovers far more smoothly.
+
+Notice the backplane is required in **both** columns. Stickiness routes a client *back* to its instance, but it does nothing to help instance A reach a client on instance B. Stickiness is about reconnection and local state; it is never a substitute for cross-instance fan-out. For most modern real-time systems the recommended default is **stateless instances plus a backplane and shared store**, reserving stickiness for cases where rebuilding per-client state on every reconnect would be genuinely expensive.
+
+<Callout title="Pick one, but keep the backplane">
+Sticky sessions let an instance trust in-memory state by routing each client back to the same place; stateless instances push all state to a shared store so any instance can serve anyone. Either way the load balancer must forward the `Upgrade` header and tolerate idle sockets — and either way you still need the pub/sub backplane, because stickiness never lets one instance reach another's clients.
+</Callout>
+
+export const quizSticky = [
+  {
+    q: 'What must a load balancer do for a WebSocket handshake to succeed?',
+    options: [
+      'Compress the request body',
+      'Forward the Connection: Upgrade and Upgrade: websocket headers instead of terminating them as plain HTTP',
+      'Add a Content-Length header',
+      'Convert the request to HTTP/2',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why are stateless instances generally easier to deploy and rebalance than sticky ones?',
+    options: [
+      'They use less CPU per message',
+      'Because no instance holds per-client state that matters, the balancer can route any connection anywhere',
+      'They do not need a backplane',
+      'They keep all clients on one instance',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is a backplane still required even when you use sticky sessions?',
+    options: [
+      'Stickiness disables broadcasting entirely',
+      'Stickiness only routes a client back to its own instance; it never lets one instance reach clients on another',
+      'Sticky sessions store messages in cookies',
+      'The backplane replaces the load balancer',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="scaling-and-pubsub/sticky-vs-stateless" questions={quizSticky} />
+
+<ProgressTracker client:visible id="scaling-and-pubsub/sticky-vs-stateless" />

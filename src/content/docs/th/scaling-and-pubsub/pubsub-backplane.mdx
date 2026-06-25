@@ -1,0 +1,180 @@
+---
+title: 'Pub/Sub Backplane'
+description: 'วาง bus ที่แชร์กันไว้ระหว่าง instance เพื่อให้ทุกข้อความที่ publish ไปถึงทุก instance ซึ่งจากนั้นจะ fan-out ไปยัง client ภายในของตัวเอง — พร้อม demo สอง instance ที่รันได้'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+บทเรียนก่อนหน้าทิ้งคำระบุปัญหาที่ชัดเจนไว้ให้เรา: instance A มองไม่เห็น socket ที่ instance B ถือไว้ ดังนั้น broadcast บน A จึงไม่มีวันไปถึง client บน B ทางแก้คือเลิกพยายามไปถึง *socket ของ instance อื่น* โดยตรง และไปถึง *instance อื่น* แทน ให้ทุก instance มีสายที่แชร์ร่วมกันซึ่งทุกตัวฟังอยู่ และให้แต่ละ instance รับผิดชอบ client ภายในของตัวเอง
+
+สายที่แชร์ร่วมกันนั้นคือ **pub/sub backplane**
+
+## รูปแบบ: publish ครั้งเดียว fan-out ทุกที่
+
+flow นี้มีการเคลื่อนไหวเพียงสองท่า และการทำให้ลำดับถูกต้องคือเคล็ดลับทั้งหมด:
+
+1. **publish อย่า send** เมื่อ client ส่งข้อความ instance จะ*ไม่* loop ผ่าน socket ภายในก่อน มันจะ **publish** ข้อความไปยัง channel ที่แชร์กันบน bus
+2. **subscribe และ fan-out** ทุก instance — รวมถึงตัวที่ publish — จะ **subscribe** channel นั้นไว้ เมื่อ bus ส่งข้อความมา แต่ละ instance จะ loop ผ่าน client ภายใน*ของตัวเอง*แล้วส่ง
+
+instance ที่ publish ปฏิบัติต่อตัวเองเหมือน subscriber อื่น ๆ ไม่มี branch พิเศษว่า "และส่งภายในด้วย" การส่งภายในเกิดขึ้นเพราะ publisher เป็น subscriber ด้วยเช่นกัน เส้นทางโค้ดเดียว ไปถึง client ทุกตัว
+
+<Mermaid title="publish ไปยัง bus ครั้งเดียว ทุก instance fan-out ไปยัง client ของตัวเอง" code={fanoutDiagram} />
+
+export const fanoutDiagram = `flowchart TB
+  a1["client 1"] -- "sends message" --> A["Instance A"]
+  A == "1. publish to channel" ==> bus[["Shared bus (Redis / NATS / Kafka)"]]
+  bus == "2. deliver to all subscribers" ==> A
+  bus == "2. deliver to all subscribers" ==> B["Instance B"]
+  A -- "3. fan out locally" --> a1
+  A -- "3. fan out locally" --> a2["client 2"]
+  B -- "3. fan out locally" --> b1["client 3"]
+  B -- "3. fan out locally" --> b2["client 4"]`;
+
+## สิ่งนี้หน้าตาเป็นอย่างไรในโค้ด
+
+handler หดเล็กลงแทนที่จะโตขึ้น การรับข้อความจาก client กลายเป็นการ publish ครั้งเดียว ตรรกะการส่งทั้งหมดย้ายเข้าไปอยู่ใน callback ของ subscription
+
+```ts
+// One bus connection per instance, shared by all its sockets.
+// `bus` here stands in for a Redis/NATS/Kafka client.
+const channel = 'room:general';
+
+// When a local client sends, publish — do NOT loop sockets here.
+function onClientMessage(text: string, fromUserId: string) {
+  bus.publish(channel, JSON.stringify({ fromUserId, text }));
+}
+
+// Every instance runs this once at startup.
+bus.subscribe(channel, (raw: string) => {
+  const msg = JSON.parse(raw) as { fromUserId: string; text: string };
+  // Fan out to THIS instance's local clients only.
+  for (const conn of connections.values()) {
+    if (conn.rooms.has('general')) {
+      conn.socket.send(raw);
+    }
+  }
+});
+```
+
+สังเกตว่า `onClientMessage` ไม่เคยแตะ `connections` เลย มันไม่สามารถส่งซ้ำซ้อนโดยบังเอิญหรือพลาด remote client ได้ เพราะมันไม่ได้ส่งเลย — มันแค่ publish การส่งทั้งหมดเป็นงานของ subscriber และทุก instance รัน subscriber ตัวเดียวกัน
+
+## bus ไหนดี? Redis, NATS, หรือ Kafka
+
+ทั้งสามตัวขนส่งข้อความระหว่าง instance ได้ ความแตกต่างอยู่ที่ guarantee ที่มันเพิ่มให้
+
+- **Redis pub/sub** — ค่าเริ่มต้นที่พบบ่อย เรียบง่ายสุด ๆ latency ต่ำมาก แบบ *fire-and-forget*: ถ้า instance ไม่ได้ subscribe อยู่ในขณะที่ข้อความถูก publish มันจะไม่มีวันเห็นข้อความนั้นเลย เหมาะอย่างยิ่งสำหรับ live chat และ presence ที่การพลาดข้อความระหว่างทางไม่ใช่เรื่องร้ายแรง
+- **NATS** — messaging น้ำหนักเบาที่สร้างมาเพื่อจุดประสงค์นี้ มีแกน fire-and-forget คล้ายกัน พร้อม persistence ที่เป็น option (JetStream) เมื่อคุณต้องการ replay
+- **Kafka** — log ที่ durable, มีลำดับ, และ replay ได้ รันหนักกว่า แต่ข้อความถูกเก็บไว้ ดังนั้น instance ที่กำลัง restart สามารถตามทันสิ่งที่มันพลาดไปได้ เลือกใช้มันเมื่อ event เหล่านั้นต้องถูกจัดเก็บ ตรวจสอบ หรือถูก consume โดยระบบอื่นด้วย
+
+สำหรับ real-time fan-out ล้วน ๆ Redis pub/sub มักเป็นตัวเลือกแรกที่ถูกต้อง คุณค่อยขยับไปใช้ NATS หรือ Kafka เมื่อคุณต้องการ persistence, ลำดับ, หรือ replay
+
+## ดูสอง instance แชร์ bus เดียวกัน
+
+demo ด้านล่างจำลองทั้งรูปแบบใน browser ของคุณ: in-memory bus ที่แชร์กันหนึ่งตัวและ server instance สองตัว แต่ละตัวถือ client ภายในของตัวเอง ดูลำดับใน log — ข้อความถูก publish ครั้งเดียว จากนั้นทั้งสอง instance fan-out และ client บน instance *อื่น* ก็ได้รับมัน นั่นคือช่องว่าง cross-instance ที่ถูกปิดแล้ว
+
+export const backplaneDemo = `(function () {
+  // A tiny in-page pub/sub bus — stands in for Redis/NATS/Kafka.
+  // Fire-and-forget: it just calls every current subscriber.
+  class Bus {
+    constructor() { this.subs = {}; }
+    subscribe(channel, fn) {
+      (this.subs[channel] = this.subs[channel] || []).push(fn);
+    }
+    publish(channel, payload) {
+      (this.subs[channel] || []).forEach((fn) => fn(payload));
+    }
+  }
+
+  // A fake client: just remembers what it was delivered.
+  class Client {
+    constructor(name) { this.name = name; }
+    deliver(text) { console.log('   -> ' + this.name + ' received: "' + text + '"'); }
+  }
+
+  // A server instance: holds local clients, talks to the shared bus.
+  class Instance {
+    constructor(name, bus) {
+      this.name = name;
+      this.bus = bus;
+      this.clients = [];
+      // Subscribe once: fan out to MY local clients only.
+      this.bus.subscribe('room:general', (raw) => {
+        const msg = JSON.parse(raw);
+        console.log('[' + this.name + '] bus delivered; fanning out to ' + this.clients.length + ' local client(s)');
+        this.clients.forEach((c) => c.deliver(msg.text));
+      });
+    }
+    addClient(client) { this.clients.push(client); }
+    // A local client sends: publish, do NOT loop sockets here.
+    onClientMessage(text) {
+      console.log('[' + this.name + '] received from a local client; publishing to bus');
+      this.bus.publish('room:general', JSON.stringify({ text: text }));
+    }
+  }
+
+  const bus = new Bus();
+  const a = new Instance('Instance A', bus);
+  const b = new Instance('Instance B', bus);
+
+  a.addClient(new Client('client-1 (on A)'));
+  a.addClient(new Client('client-2 (on A)'));
+  b.addClient(new Client('client-3 (on B)'));
+  b.addClient(new Client('client-4 (on B)'));
+
+  console.log('client-1 posts a message on Instance A:');
+  a.onClientMessage('hello everyone');
+
+  console.log('');
+  console.log('Both instances fanned out — clients on A AND B received it.');
+})();`;
+
+<NodeRunner client:visible code={backplaneDemo} />
+
+log พิสูจน์ประเด็นนี้: ข้อความของ client-1 ถูก publish ครั้งเดียวบน instance A, bus ส่งมันให้ subscriber *ทั้งสอง* ตัว และ client 3 กับ 4 บน instance B ได้รับมันแม้ว่า instance A จะไม่เคยเห็น socket ของพวกเขาเลย เปลี่ยน `Bus` ในหน้านี้เป็น Redis client จริง แล้วรูปแบบนี้เป๊ะ ๆ ก็จะรันข้ามเครื่องได้
+
+<Callout title="แบบจำลองทางความคิด">
+เลิกคิดว่า "ส่งให้ client ทุกตัว" แล้วเริ่มคิดว่า "publish event แล้วแต่ละ instance ส่งให้ตัวของมันเอง" backplane เปลี่ยน broadcast ที่เข้าไม่ถึงหนึ่งครั้งให้กลายเป็น local broadcast หลายครั้ง หนึ่งครั้งต่อ instance — และเพราะ publisher เป็น subscriber ด้วย คุณจึงเขียนตรรกะการส่งเพียงครั้งเดียวเท่านั้น
+</Callout>
+
+export const quizBackplane = [
+  {
+    q: 'ในรูปแบบ backplane instance ทำอะไรในวินาทีที่ local client ส่งข้อความ?',
+    options: [
+      'loop ผ่าน socket ภายในของมันแล้วส่งทันที',
+      'publish ข้อความไปยัง channel ที่แชร์กันโดยไม่ส่งมันด้วยตัวเอง',
+      'forward raw socket ไปยัง instance อื่น',
+      'เขียนข้อความลง database แล้ว poll หามัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมจึงไม่มี branch พิเศษว่า "ส่งให้ client ของตัวเองด้วย" ใน publish handler?',
+    options: [
+      'local client ถูกส่งโดย database',
+      'instance ที่ publish เป็น subscriber ด้วย ดังนั้นมันจึงรับและ fan-out เหมือนตัวอื่น ๆ',
+      'bus สะท้อนข้อความตรงไปยัง socket',
+      'local client poll หาข้อความใหม่แยกต่างหาก',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เมื่อใดคุณจึงจะเลือก Kafka แทน Redis pub/sub สำหรับ backplane?',
+    options: [
+      'เมื่อคุณต้องการ latency ต่ำที่สุดและการตั้งค่าที่ง่ายที่สุด',
+      'เมื่อการพลาดข้อความระหว่างทางเป็นเรื่องที่ยอมรับได้',
+      'เมื่อคุณต้องการ durability, ลำดับ, หรือ replay เพื่อให้ instance ที่กำลัง restart ตามทันได้',
+      'เมื่อคุณมี instance เพียงตัวเดียว',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="scaling-and-pubsub/pubsub-backplane" questions={quizBackplane} />
+
+<ProgressTracker client:visible id="scaling-and-pubsub/pubsub-backplane" />

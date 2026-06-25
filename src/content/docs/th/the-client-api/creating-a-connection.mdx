@@ -1,0 +1,151 @@
+---
+title: 'Creating a Connection'
+description: 'เจาะลึก WebSocket constructor — ws กับ wss, subprotocol, สิ่งที่เกิดขึ้นในวินาทีที่คุณเรียก new WebSocket และเดโมที่รันได้จริง'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ทุกอย่างเริ่มต้นด้วยบรรทัดเดียว constructor คือจุดที่ WebSocket ถือกำเนิด และการตัดสินใจไม่กี่อย่างที่คุณทำตรงนี้ — เลือกใช้ scheme ไหน, subprotocol ไหน — เป็นตัวกำหนดรูปร่างของการเชื่อมต่อทั้งหมด มาแยกบรรทัดนั้นออกดูทีละส่วนกัน
+
+## ลายเซ็นของ constructor
+
+```ts
+const ws = new WebSocket(url);
+// or, asking for a specific application protocol:
+const ws = new WebSocket(url, protocols);
+```
+
+อาร์กิวเมนต์แรก `url` จำเป็นต้องมี และต้องเป็น URL แบบสมบูรณ์ที่ใช้ WebSocket scheme ส่วนอาร์กิวเมนต์ที่สอง `protocols` เป็นทางเลือก: เป็นสตริงเดียวหรืออาร์เรย์ของสตริงที่ระบุ **subprotocol** ที่ไคลเอนต์ของคุณยินดีจะพูด นั่นคือลายเซ็นทั้งหมด — URL บังคับหนึ่งตัวกับลิสต์ทางเลือกหนึ่งตัว
+
+## ws กับ wss
+
+WebSocket URL ไม่เคยใช้ `http` มันใช้หนึ่งในสอง scheme เฉพาะทาง:
+
+- **`ws://`** — การเชื่อมต่อแบบไม่เข้ารหัส ไบต์เดินทางแบบเปิดเผย เหมือน `http://` ธรรมดาทุกประการ
+- **`wss://`** — โปรโตคอลเดียวกันที่ห่อด้วย TLS เหมือน `https://` ทุกประการ เข้ารหัส ยืนยันตัวตน และแก้ไขดัดแปลงได้ยากกว่ามาก
+
+กฎในทางปฏิบัติเรียบง่าย: **ใช้ `wss://` สำหรับทุกอย่างที่ไม่ใช่การทดสอบในเครื่องแบบใช้แล้วทิ้ง** เบราว์เซอร์ยังบังคับใช้กฎ mixed-content อีกด้วย — หน้าเว็บที่เสิร์ฟผ่าน `https://` ไม่ได้รับอนุญาตให้เปิดการเชื่อมต่อ `ws://` ธรรมดา ดังนั้นบนเว็บไซต์จริงทุกแห่ง `wss://` จึงแทบเป็นข้อบังคับ
+
+```ts
+const dev  = new WebSocket('ws://localhost:8080');     // fine for local dev only
+const prod = new WebSocket('wss://chat.example.com');  // always this in production
+```
+
+## Subprotocol
+
+อาร์กิวเมนต์ที่สองซึ่งเป็นทางเลือกช่วยให้ไคลเอนต์และเซิร์ฟเวอร์ตกลงกันว่า *จะพูดโปรโตคอลระดับแอปพลิเคชันตัวไหน* บน socket — คิดเสียว่ามันคือการเลือกภาษากลางก่อนเริ่มบทสนทนา เบราว์เซอร์ส่งลิสต์ของคุณไป เซิร์ฟเวอร์เลือก **หนึ่งตัว** และตัวเลือกนั้นจะส่งกลับมาที่ `ws.protocol` เมื่อการเชื่อมต่อเปิดขึ้น
+
+```ts
+const ws = new WebSocket('wss://example.com', ['chat.v2', 'chat.v1']);
+ws.onopen = () => {
+  console.log('server chose:', ws.protocol); // e.g. "chat.v2"
+};
+```
+
+คุณเรียงลิสต์ตามลำดับความชอบ เซิร์ฟเวอร์ถูกคาดหวังให้เคารพลำดับนั้น ถ้าเซิร์ฟเวอร์ไม่รองรับสักตัว มันควรปฏิเสธการเชื่อมต่อ subprotocol เป็นทางเลือก — หลายแอปไม่เคยใช้เลย — แต่มันคือวิธีที่สะอาดในการกำหนดเวอร์ชันของรูปแบบข้อมูลบนสาย
+
+## เกิดอะไรขึ้นในวินาทีที่คุณสร้างมัน
+
+การเรียก `new WebSocket(url)` **ไม่** บล็อก มันคืนค่าทันทีโดยออบเจกต์อยู่ในสถานะ `CONNECTING` ขณะที่ handshake ทำงานอยู่เบื้องหลัง ไดอะแกรมนี้ตามรอยช่วงเวลาแรก ๆ เหล่านั้น:
+
+<Mermaid title="จากการสร้างจนถึง open" code={constructDiagram} />
+
+export const constructDiagram = `sequenceDiagram
+  participant App as Your code
+  participant WS as WebSocket object
+  participant Srv as Server
+  App->>WS: new WebSocket(url, protocols)
+  Note over WS: readyState = CONNECTING (returns immediately)
+  WS->>Srv: HTTP Upgrade request (+ chosen protocols)
+  Srv-->>WS: 101 Switching Protocols (picks one protocol)
+  Note over WS: readyState = OPEN
+  WS-->>App: onopen fires
+  App->>WS: now safe to ws.send(...)`;
+
+เพราะการสร้างคืนค่าทันที ออบเจกต์จึงยังไม่พร้อมส่งอะไรเลย — `readyState` ยังเป็น `CONNECTING` อยู่ คุณต้องผูก handler ทันทีหลังจากสร้าง แล้วรอ `onopen` การพยายาม `send()` ก่อนหน้านั้นจะ throw เราจะอาศัยหลักการนี้ในบทเรียนถัดไป
+
+## การเชื่อมต่อที่ทำงานจริง
+
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ มันเลียนแบบ constructor แบบสองอาร์กิวเมนต์และรายงาน `protocol` ที่เจรจาได้ ในแอปจริงคุณจะเขียน `new WebSocket('wss://your-server', ['chat.v2'])` และไม่มีอะไรอื่นเปลี่ยน
+
+export const createEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server', ['chat.v2']).
+  class EchoSocket {
+    constructor(url, protocols) {
+      this.url = url;
+      this.readyState = 0; // CONNECTING
+      const list = Array.isArray(protocols) ? protocols : (protocols ? [protocols] : []);
+      this.protocol = list[0] || ''; // pretend the server picked our first choice
+      setTimeout(() => {
+        this.readyState = 1; // OPEN
+        if (this.onopen) this.onopen({});
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket('wss://example.com/socket', ['chat.v2', 'chat.v1']);
+  console.log('right after construct, readyState:', ws.readyState, '(0 = CONNECTING)');
+  ws.onopen = () => {
+    console.log('open — server agreed on protocol:', ws.protocol);
+    ws.send('handshake complete');
+  };
+  ws.onmessage = (event) => {
+    console.log('received:', event.data);
+    ws.close();
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={createEchoCode} />
+
+ล็อกแรกพิสูจน์ว่าการสร้างคืนค่ามาโดย `readyState` ยังเป็น `0` อยู่ ต่อมาภายใน `onopen` เท่านั้นการเชื่อมต่อจึงใช้งานได้ — และ subprotocol ที่เจรจาได้ก็พร้อมใช้ตรงนั้นในรูปของ `ws.protocol`
+
+<Callout title="เช็กลิสต์ของ constructor">
+ใช้ `wss://` ทุกที่ยกเว้นการทดสอบในเครื่อง; ส่ง subprotocol เป็นอาร์เรย์ที่เรียงตามลำดับความชอบและอ่านตัวที่ชนะจาก `ws.protocol`; และจำไว้ว่า constructor คืนค่าทันทีในสถานะ `CONNECTING` — รอ `onopen` ก่อนที่คุณจะส่ง
+</Callout>
+
+export const quizCreate = [
+  {
+    q: 'WebSocket ในโปรดักชันควรใช้ URL scheme แบบใด?',
+    options: [
+      'http://',
+      'ws:// เพื่อความเร็ว',
+      'wss:// — scheme ที่เข้ารหัสด้วย TLS',
+      'https://',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'จุดประสงค์ของอาร์กิวเมนต์ตัวที่สองซึ่งเป็นทางเลือกของ constructor คืออะไร?',
+    options: [
+      'มันตั้งค่า timeout ของการเชื่อมต่อ',
+      'มันระบุ subprotocol เพื่อให้ไคลเอนต์และเซิร์ฟเวอร์ตกลงกันบน application protocol ตัวเดียว',
+      'มันเลือกพอร์ต TCP',
+      'มันเปิดโหมด binary',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ออบเจกต์อยู่ในสถานะใดทันทีหลังจาก new WebSocket(url) คืนค่า?',
+    options: [
+      'OPEN — พร้อมส่งได้เลย',
+      'CONNECTING — handshake ทำงานอยู่เบื้องหลัง',
+      'CLOSED จนกว่าคุณจะเรียก connect()',
+      'มันบล็อกจนกว่าจะเชื่อมต่อ',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="the-client-api/creating-a-connection" questions={quizCreate} />
+
+<ProgressTracker client:visible id="the-client-api/creating-a-connection" />

@@ -1,0 +1,165 @@
+---
+title: 'Sending and Receiving'
+description: 'วิธีส่งด้วย ws.send(), รับผ่าน message event และ event.data, ลำดับของข้อความ และกฎที่ว่าส่งได้เฉพาะตอน OPEN เท่านั้น — พร้อมเดโมที่รันได้จริง'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+เมื่อการเชื่อมต่อเป็น `OPEN` แล้ว งานประจำวันมีแค่สองอย่าง: ผลักข้อความออกไปด้วย `send()` และตอบสนองต่อข้อความที่เข้ามาผ่าน message event บทเรียนนี้ตอกย้ำทั้งสองทิศทาง บวกกับสองกฎที่ทำให้คนสะดุดมากที่สุด — ส่งได้ *เมื่อไหร่* และสิ่งต่าง ๆ มาถึง *ตามลำดับใด*
+
+## การส่งด้วย ws.send()
+
+ในการส่ง คุณเรียก `send()` พร้อม payload ของคุณ:
+
+```ts
+ws.send('hello, server');
+ws.send(JSON.stringify({ type: 'chat', text: 'hi' }));
+```
+
+`send()` รับสตริงหรือ binary data (เราพูดถึง binary ในบทถัดไป) มัน **ไม่** คืนค่าใด ๆ และไม่ให้การตอบรับ — มันแค่ยื่นข้อความให้การเชื่อมต่อเท่านั้น รูปแบบที่พบบ่อยคือการส่งข้อมูลที่มีโครงสร้างโดยแปลงออบเจกต์เป็น JSON แล้ว parse มันที่อีกฝั่งหนึ่ง
+
+## การรับผ่าน message event
+
+ข้อความที่เข้ามาจะมาถึงในรูปของ message event และ payload จะอยู่บน `event.data` เสมอ:
+
+```ts
+ws.onmessage = (event) => {
+  const data = event.data;          // a string (or binary, next lesson)
+  const msg = JSON.parse(data);     // if the peer sent JSON
+  console.log(msg.type, msg.text);
+};
+```
+
+`event.data` คือ *ที่เดียว* ที่ payload อยู่ ถ้าคุณส่ง JSON มา คุณก็ parse มันตรงนี้ ถ้าคุณส่งข้อความธรรมดามา คุณก็ใช้มันได้เลย handler ทำงานหนึ่งครั้งต่อหนึ่งข้อความ และยิงได้บ่อยเท่าที่เซิร์ฟเวอร์มีเรื่องจะพูด
+
+## คุณส่งได้เฉพาะตอน OPEN เท่านั้น
+
+นี่คือกฎเดียวที่ควรสักไว้ในความทรงจำ: **`send()` ใช้ได้เฉพาะขณะที่ `readyState` เป็น `OPEN` เท่านั้น**
+
+- เรียก `send()` ขณะยังเป็น `CONNECTING` แล้วมันจะ throw `InvalidStateError` — การเชื่อมต่อยังไม่พร้อม
+- เรียก `send()` หลังจาก `CLOSING` หรือ `CLOSED` แล้วข้อมูลจะถูกทิ้งเงียบ ๆ มันไม่มีวันถึง peer
+
+ดังนั้นรูปแบบที่ปลอดภัยคือส่งจากภายใน `onopen` หรือใส่ guard ให้ทุกการเรียก:
+
+```ts
+function safeSend(ws: WebSocket, data: string) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(data);
+  } else {
+    console.warn('not open — dropping or queuing message');
+  }
+}
+```
+
+## ลำดับถูกรับประกัน
+
+WebSocket ทำงานบนการเชื่อมต่อ TCP เดียว และนั่นมอบการรับประกันที่หนักแน่นและเรียบง่ายให้คุณ: **ข้อความถูกส่งถึงตามลำดับที่คุณส่งออกไป** ถ้าคุณเรียก `send('a')` แล้ว `send('b')` แล้ว `send('c')` peer จะได้รับ `a`, `b`, `c` — ไม่มีวันสลับลำดับ ไม่มีวันซ้ำ เช่นเดียวกันกับข้อความที่เซิร์ฟเวอร์ส่งมาหาคุณ
+
+<Mermaid title="การส่งและ message event ที่มันกระตุ้น ตามลำดับ" code={ioDiagram} />
+
+export const ioDiagram = `sequenceDiagram
+  participant App as Your code
+  participant WS as WebSocket
+  participant Srv as Server
+  Note over WS: readyState = OPEN
+  App->>WS: send("a")
+  App->>WS: send("b")
+  WS->>Srv: a
+  WS->>Srv: b
+  Srv-->>WS: reply to a
+  WS-->>App: message event (data = reply to a)
+  Srv-->>WS: reply to b
+  WS-->>App: message event (data = reply to b)`;
+
+สิ่งที่ลำดับ *ไม่* รับประกันคือการจับคู่ request/response WebSocket ไม่มีแนวคิดในตัวว่า "การตอบกลับนี้เป็นของการส่งนั้น" — ถ้าคุณต้องการแบบนั้น คุณต้องเพิ่ม correlation id ของคุณเองไว้ในข้อความ ลำดับ ใช่; การจับคู่ นั่นเป็นหน้าที่ของคุณ
+
+## ส่งและรับ แบบสด
+
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ มันส่งสามข้อความติดกันจากภายใน `onopen` และพิมพ์ echo แต่ละตัวเมื่อมันกลับมา — ตามลำดับ ในแอปจริงมีเพียงบรรทัดแรกที่เปลี่ยนเป็น `new WebSocket('wss://your-server')`
+
+export const sendRecvCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.OPEN = 1;
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) {
+      if (this.readyState !== 1) { console.log('blocked send — not OPEN'); return; }
+      setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50);
+    }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  // Proof of the rule: this send happens while still CONNECTING and is blocked.
+  ws.send('too early');
+
+  let received = 0;
+  ws.onopen = () => {
+    console.log('open — sending three messages in order');
+    ws.send(JSON.stringify({ n: 1 }));
+    ws.send(JSON.stringify({ n: 2 }));
+    ws.send(JSON.stringify({ n: 3 }));
+  };
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    console.log('received message number', msg.n);
+    received += 1;
+    if (received === 3) ws.close();
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={sendRecvCode} />
+
+สังเกตว่าความพยายามแรก — `too early` — ถูกบล็อกเพราะ socket ยังเป็น `CONNECTING` อยู่ จากนั้นเมื่อเปิดแล้ว สามข้อความที่มีหมายเลขก็กลับมาเป็น `1`, `2`, `3` ตามลำดับที่มันถูกส่งออกไปพอดี นั่นคือ `send()`, message event, กฎ OPEN-only และลำดับ ทั้งหมดในการรันครั้งเดียว
+
+<Callout title="สองทิศทาง สามกฎ">
+ส่งด้วย `ws.send(data)`; รับบน `event.data` ภายใน `onmessage` คุณส่งได้เฉพาะตอน `OPEN` (ส่งก่อนหน้านั้นจะ throw, หลังจากนั้นจะถูกทิ้ง), การส่งรักษาลำดับเอาไว้บนการเชื่อมต่อ TCP เดียว แต่ API ไม่เคยจับคู่การตอบกลับกับ request — เพิ่ม correlation id ของคุณเองถ้าคุณต้องการแบบนั้น
+</Callout>
+
+export const quizSendRecv = [
+  {
+    q: 'payload ของข้อความที่เข้ามาอยู่ที่ไหน?',
+    options: [
+      'event.payload',
+      'event.data',
+      'event.message',
+      'ws.lastMessage',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เกิดอะไรขึ้นถ้าคุณเรียก send() ขณะที่ socket ยังเป็น CONNECTING?',
+    options: [
+      'ข้อความถูกเข้าคิวและส่งอัตโนมัติเมื่อ open',
+      'มัน throw InvalidStateError',
+      'มันเปิดการเชื่อมต่อให้เร็วขึ้น',
+      'ไม่เกิดอะไร — มันปลอดภัยเสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'WebSocket ให้การรับประกันแบบใดสำหรับข้อความ?',
+    options: [
+      'การส่งแต่ละครั้งได้รับการตอบกลับที่จับคู่กัน',
+      'ข้อความอาจมาถึงในลำดับใดก็ได้เพื่อความเร็ว',
+      'ข้อความถูกส่งถึงตามลำดับที่ถูกส่งออกไป',
+      'ส่งซ้ำเพื่อเพิ่มความน่าเชื่อถือ',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="the-client-api/sending-and-receiving" questions={quizSendRecv} />
+
+<ProgressTracker client:visible id="the-client-api/sending-and-receiving" />

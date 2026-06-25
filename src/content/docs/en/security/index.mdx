@@ -1,0 +1,96 @@
+---
+title: 'Security'
+description: 'The WebSocket security surface — no same-origin protection by default, long-lived auth, per-message authorization, and abuse — plus what this module covers.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Everything so far has been about making WebSockets **work**. This module is about making them **safe**. A persistent, bidirectional connection is a wonderful tool and an unusually generous attack surface: it stays open, it carries many messages, and — unlike a fetch — the browser will happily let a page from *anywhere* open one to your server. If you carry your HTTP security instincts straight over, you will be wrong in a few specific, dangerous ways.
+
+## The shape of the problem
+
+A WebSocket connection has a longer and stranger life than an HTTP request, and each phase brings its own risk:
+
+- **No same-origin protection by default.** The browser's same-origin policy and CORS preflight do **not** apply to WebSocket upgrades. Any web page can call `new WebSocket('wss://your-server')` and the handshake will be attempted. If your server does not check the `Origin` header itself, a malicious site can ride a logged-in user's cookies straight into your socket — the WebSocket version of CSRF.
+- **Long-lived authentication.** An HTTP request authenticates and dies in milliseconds. A WebSocket authenticates once and may stay open for hours. Whatever identity you established at the handshake is the identity you are trusting for the entire session, long after the original token might have expired.
+- **Per-message authorization.** Over one connection a client sends many different messages — subscribe, publish, edit, delete. Authenticating the connection tells you *who* is there. It says nothing about whether *this particular message* is allowed. Every message is a fresh authorization decision.
+- **Abuse and resource exhaustion.** An open socket is a standing invitation to flood you: thousands of messages a second, multi-megabyte frames, or simply a flood of half-open connections that never finish their handshake. Without limits, one client can starve every other.
+
+## A map of the surface
+
+<Mermaid title="Where each security concern lives in a connection's life" code={surfaceDiagram} />
+
+export const surfaceDiagram = `flowchart TB
+  A["Browser opens<br/>wss:// connection"] --> B{"Handshake"}
+  B -- "check Origin header" --> C{"Authenticate<br/>(cookie / token)"}
+  C -- "reject: close 1008" --> X["Connection refused"]
+  C -- "accept" --> D["Open connection<br/>(identity is now fixed)"]
+  D --> E["For every message"]
+  E --> F{"Authorize THIS action<br/>against the identity"}
+  F -- "rate limit + size cap + validate" --> G["Process message"]
+  F -- "deny" --> H["Reject / close"]`;
+
+Read that diagram top to bottom and you have the whole module: guard the **handshake**, then guard **every message**, and keep an eye on **resources** the whole time. Each box becomes a lesson.
+
+## Always `wss`, never `ws`
+
+Before any of that, one rule that overrides everything: in production you use **`wss://`**, the TLS-encrypted scheme, exactly as you use `https://`. A plain `ws://` connection sends frames — including your auth token and every message — as cleartext that anyone on the network path can read or tamper with. Worse, a page served over `https://` is not even *allowed* to open a `ws://` connection; browsers block the mixed-content downgrade. Treat `ws://` as a localhost-only development convenience and nothing more. We revisit TLS in depth in the final lesson.
+
+## What this module covers
+
+This module — **Security** — walks the surface above one layer at a time:
+
+1. **Security (you are here)** — the overall surface and why WebSocket security differs from HTTP.
+2. **Origin and handshake auth** — why WebSockets are not CORS-protected, how to validate the `Origin` header, and how to authenticate during the handshake without leaking your token.
+3. **Authorization** — authenticate once, then authorize **every** message against the connection's real identity.
+4. **Rate limiting and validation** — token-bucket rate limits, message-size caps, and parsing every message defensively.
+5. **TLS and DoS** — `wss`/TLS, per-IP connection limits, slowloris and handshake floods, and authenticating before you allocate resources.
+
+By the end you will have a checklist you can run against any WebSocket service: is the origin checked, is the handshake authenticated, is each message authorized, are floods and oversized frames bounded, and is the whole thing on TLS.
+
+<Callout title="The browser will not protect you here">
+Unlike `fetch`, a cross-origin `WebSocket` upgrade sends **no CORS preflight** and is **not** blocked by the same-origin policy. The browser does send an `Origin` header on the handshake — but it is *your server's* job to read it and reject unexpected origins. If you skip that check, any website can open an authenticated socket to your server on a logged-in user's behalf.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Why is a WebSocket upgrade not protected the way a cross-origin fetch is?',
+    options: [
+      'WebSockets always run over TLS, so CORS is unnecessary',
+      'The same-origin policy and CORS preflight do not apply to WebSocket upgrades — the server must check the Origin header itself',
+      'Browsers refuse all cross-origin WebSocket connections automatically',
+      'WebSockets cannot send cookies, so there is nothing to protect',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Authenticating a WebSocket connection at the handshake tells you what?',
+    options: [
+      'That every message the connection sends is automatically allowed',
+      'Who is on the connection — but not whether any given message is permitted',
+      'That the connection can never be abused',
+      'That TLS is in use',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the rule about scheme in production?',
+    options: [
+      'Use ws:// because it is faster',
+      'Use wss:// (TLS) — ws:// sends frames in cleartext and is blocked from https pages as mixed content',
+      'Either scheme is fine as long as you check the Origin',
+      'Use ws:// and rely on the firewall',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="security/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="security/index" />

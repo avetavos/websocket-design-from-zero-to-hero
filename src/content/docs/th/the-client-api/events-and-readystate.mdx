@@ -1,0 +1,159 @@
+---
+title: 'Events and readyState'
+description: 'สี่ event ของ WebSocket — open, message, close, error — และฟิลด์ readyState ที่ติดตามสี่สถานะของการเชื่อมต่อ พร้อมเดโมที่รันได้จริง'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+WebSocket เป็นออบเจกต์ที่ขับเคลื่อนด้วย event โค้ดของคุณไม่ต้องคอย poll หรือบล็อกรอมัน แต่คุณผูก handler ไว้แล้วปล่อยให้การเชื่อมต่อเรียกกลับมาหาคุณเมื่อมีอะไรเกิดขึ้น มี event อยู่ **สี่** ตัวพอดี และฟิลด์เดียว — `readyState` — ที่บอกเสมอว่าคุณอยู่ตรงไหน เชี่ยวชาญสิ่งเหล่านี้แล้ว API จะไม่มีอะไรเซอร์ไพรส์อีก
+
+## สี่ event
+
+WebSocket บนเบราว์เซอร์ทุกตัวยิง event สี่ตัวเดียวกัน ไม่มากกว่านี้:
+
+- **`open`** — handshake สำเร็จ การเชื่อมต่อตอนนี้เป็น `OPEN` และพร้อมใช้งานแล้ว นี่คือที่เดียวที่ปลอดภัยในการเริ่มส่ง
+- **`message`** — มีข้อความมาถึงจาก peer payload อยู่บน `event.data`
+- **`close`** — การเชื่อมต่อปิดลงแล้ว event นี้พกตัวเลข `event.code` และสตริง `event.reason` ที่อธิบายว่าทำไม
+- **`error`** — มีบางอย่างผิดพลาด มันเป็นแค่ข้อมูลบอกกล่าวและจงใจให้คลุมเครือ (เพื่อความปลอดภัย) event `close` มักจะตามมาเสมอ
+
+คุณผูก handler ได้สองวิธี วิธีที่เร็วที่สุดคือผ่าน property `on*`:
+
+```ts
+const ws = new WebSocket('wss://example.com');
+ws.onopen    = ()      => console.log('open');
+ws.onmessage = (event) => console.log('data:', event.data);
+ws.onerror   = ()      => console.log('error');
+ws.onclose   = (event) => console.log('closed', event.code, event.reason);
+```
+
+หรือใช้ `addEventListener` ซึ่งช่วยให้คุณผูก handler ได้มากกว่าหนึ่งตัวต่อหนึ่ง event:
+
+```ts
+ws.addEventListener('message', (event) => console.log(event.data));
+```
+
+## readyState: ตัวเลขทั้งสี่
+
+ขณะที่ event บอกคุณว่าสิ่งต่าง ๆ เปลี่ยน *เมื่อไหร่* `readyState` บอกคุณว่าสถานะปัจจุบันคืออะไร *ในทุกขณะ* มันเป็นตัวเลข และคลาสเปิดให้เข้าถึงค่าคงที่ที่มีชื่อสำหรับแต่ละค่า:
+
+```ts
+WebSocket.CONNECTING; // 0 — handshake in progress
+WebSocket.OPEN;       // 1 — ready to send and receive
+WebSocket.CLOSING;    // 2 — close handshake underway
+WebSocket.CLOSED;     // 3 — finished, or never opened
+
+if (ws.readyState === WebSocket.OPEN) {
+  ws.send('safe to send now');
+}
+```
+
+สองมุมมองนี้สอดคล้องกันอย่างลงตัว: event `open` ยิงตอนที่คุณเข้าสู่สถานะ `1` และ event `close` ยิงตอนที่คุณเข้าสู่สถานะ `3` การตรวจ `ws.readyState === WebSocket.OPEN` ก่อนส่งคือ guard มาตรฐานที่กันบั๊กแบบ "ฉันพยายามส่งเร็วเกินไปหรือช้าเกินไป"
+
+## event และสถานะประสานกันอย่างไร
+
+นี่คือวงจรชีวิตเดียวกันจากบทแรก ตอนนี้กำกับด้วย event ที่ยิงในแต่ละการเปลี่ยนสถานะ:
+
+<Mermaid title="สถานะอยู่บน node, event อยู่บนการเปลี่ยนผ่าน" code={eventsDiagram} />
+
+export const eventsDiagram = `stateDiagram-v2
+  [*] --> CONNECTING: new WebSocket()
+  CONNECTING --> OPEN: open event
+  CONNECTING --> CLOSED: error then close event
+  OPEN --> CLOSING: close() / peer closes
+  CLOSING --> CLOSED: close event
+  OPEN --> CLOSED: drop, then close event
+  note right of OPEN: message events may fire repeatedly here
+  CLOSED --> [*]`;
+
+event `message` พิเศษตรงที่: มันไม่ใช่การเปลี่ยนสถานะ มันยิงได้กี่ครั้งก็ได้ขณะที่คุณนั่งอยู่ใน `OPEN` ซึ่งนั่นแหละคือจุดประสงค์ทั้งหมดของการเชื่อมต่อแบบคงอยู่ยาวนาน
+
+## ดูการเปลี่ยนสถานะแบบสด
+
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ มันล็อก `readyState` ในทุกขั้นตอนโดยใช้ค่าคงที่ที่มีชื่อ ในแอปจริงมีเพียงบรรทัดแรก — `new WebSocket('wss://your-server')` — เท่านั้นที่ต่างไป
+
+export const stateEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  const names = { 0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSING', 3: 'CLOSED' };
+  class EchoSocket {
+    constructor() {
+      this.CONNECTING = 0; this.OPEN = 1; this.CLOSING = 2; this.CLOSED = 3;
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code, reason) {
+      this.readyState = 2;
+      setTimeout(() => { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000, reason: reason || '' }); }, 10);
+    }
+  }
+
+  const ws = new EchoSocket();
+  console.log('after construct:', names[ws.readyState]);
+  ws.onopen = () => {
+    console.log('open event - readyState:', names[ws.readyState]);
+    ws.send('ping');
+  };
+  ws.onmessage = (event) => {
+    console.log('message event - data:', event.data, '- readyState still', names[ws.readyState]);
+    ws.close(1000, 'done');
+    console.log('right after close():', names[ws.readyState]);
+  };
+  ws.onclose = (event) => {
+    console.log('close event - readyState:', names[ws.readyState], '- code', event.code, '- reason', event.reason);
+  };
+})();`;
+
+<NodeRunner client:visible code={stateEchoCode} />
+
+ลองตามรอยผลลัพธ์เทียบกับไดอะแกรม: `CONNECTING` ตอนสร้าง, `OPEN` ใน handler ของ `open`, ยังคง `OPEN` เมื่อ `message` มาถึง, `CLOSING` ในวินาทีที่เรียก `close()` และ `CLOSED` เมื่อ event `close` ยิง — พกค่า code `1000` และ reason ที่เราส่งไปมาด้วย
+
+<Callout title="สองมุมมอง ความจริงเดียว">
+สี่ event บอกคุณว่าการเชื่อมต่อเปลี่ยน *เมื่อไหร่*; `readyState` (0/1/2/3 หรือค่าคงที่ที่มีชื่อ) บอกคุณว่ามันอยู่ *ตรงไหน* ตอนนี้ ใส่ guard ให้การส่งของคุณด้วย `readyState === WebSocket.OPEN` และอ่าน `code` กับ `reason` จาก event `close` เพื่อรู้ว่าทำไมมันจึงจบลง
+</Callout>
+
+export const quizEvents = [
+  {
+    q: 'event ใดสามารถยิงได้หลายครั้งในระหว่างการเชื่อมต่อครั้งเดียว?',
+    options: [
+      'open',
+      'message',
+      'close',
+      'error',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'WebSocket.OPEN ตรงกับค่าตัวเลขใด?',
+    options: [
+      '0',
+      '1',
+      '2',
+      '3',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณจะรู้ได้จากที่ไหนว่าทำไมการเชื่อมต่อจึงจบลง?',
+    options: [
+      'จาก event open',
+      'จาก event error เท่านั้น',
+      'จาก event close ผ่าน code และ reason',
+      'จาก ws.readyState เพียงอย่างเดียว',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="the-client-api/events-and-readystate" questions={quizEvents} />
+
+<ProgressTracker client:visible id="the-client-api/events-and-readystate" />

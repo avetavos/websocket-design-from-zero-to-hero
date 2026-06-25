@@ -1,0 +1,164 @@
+---
+title: 'การตรวจจับ Dead Connection'
+description: 'เปลี่ยน pong ที่หายไปให้กลายเป็นความมั่นใจว่า "อันนี้ตายแล้ว" — timeout, half-open connection, การ terminate อย่างสะอาด และเดโมสดที่ตั้งธง pong ที่หายไป'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Heartbeat จากบทเรียนที่แล้วส่งชีพจรออกไป แต่ชีพจรที่คุณส่งนั้นไร้ค่าหากคุณไม่ *ตรวจสอบว่าคำตอบกลับมา* บทเรียนนี้เป็นเรื่องของการตรวจสอบนั้น: วิธีเปลี่ยน "pong ไม่มาถึง" ให้กลายเป็นการตัดสินใจที่มั่นใจว่าจะประกาศว่า connection ตายและรื้อมันทิ้ง
+
+## การส่งคือครึ่งหนึ่ง การคาดหวังคืออีกครึ่ง
+
+ความพยายามแรกที่ผิดและพบบ่อยคือการส่ง ping บน timer แล้วหยุดแค่นั้น นั่นไม่ตรวจจับอะไรเลย การตรวจจับทั้งหมดเกิดขึ้นใน **ช่องว่างระหว่าง ping ที่คุณส่งกับ pong ที่คุณคาดหวัง** Logic คือ:
+
+1. ส่ง ping จดไว้ว่าตอนนี้มี pong *ค้าง* อยู่กับคุณ
+2. เริ่ม deadline — เช่น interval ถัดไปหรือไม่กี่วินาที
+3. ถ้า pong ที่ตรงกันมาถึงก่อน deadline ดีแล้ว: เคลียร์หนี้ connection ยังมีชีวิต
+4. ถ้า deadline ผ่านไปโดยที่หนี้ยังค้างอยู่ แสดงว่าคุณมี **missed pong** ให้ปฏิบัติต่อ connection ว่ามันตายแล้ว
+
+ดังนั้นตัวแปรที่มีประโยชน์ที่สุดใน client ของคุณคือสิ่งที่คล้าย ๆ `pongOutstanding` (หรือจำนวน ping ที่ยังไม่ได้รับคำตอบ) เมื่อมันข้ามเกณฑ์ คุณก็ลงมือ client ของ production จำนวนมากทนต่อการ miss หนึ่งหรือสองครั้งก่อนประกาศการตาย — pong ที่หายไปครั้งเดียวอาจเป็นแค่อาการสะดุดชั่วขณะ แต่สามครั้งติดกันคือศพ
+
+## Half-open connection — เหตุผลว่าทำไมเรื่องนี้ถึงยาก
+
+ตัวร้ายเบื้องหลังทั้งหมดนี้คือ connection แบบ **half-open** connection จะเป็น half-open เมื่อฝ่ายหนึ่งเชื่อว่ามันยังเชื่อมต่ออยู่ ในขณะที่อีกฝ่ายหายไปแล้วอย่างเงียบ ๆ ลองนึกภาพการโทรศัพท์ที่โทรศัพท์ของอีกฝ่ายดับไปกลางประโยค: คุณยังถือหูฟังอยู่ พูดอยู่ ไม่ได้ยินอะไรเลย โดยไม่มีเสียงสัญญาณบอกว่าสายตัดไปแล้ว
+
+สิ่งนี้เกิดขึ้นตลอดเวลาในเน็ตเวิร์กจริง:
+
+- ฝาแลปท็อปปิด OS แช่แข็ง socket โดยไม่มีการ close อย่างสะอาด
+- อุปกรณ์มือถือสลับจาก Wi-Fi ไปเป็นเซลลูลาร์ ทิ้ง socket เก่าไป
+- NAT หรือ load balancer ขับ connection ที่ idle ออกจากตารางอย่างเงียบ ๆ
+
+ในทุกกรณี **ไม่มี event `close` ยิงขึ้น** บนฝ่ายที่ยังอยู่รอด เพราะไม่มี FIN packet มาถึงมันเลย `WebSocket` ของคุณยังบอกว่า OPEN วิธี *เดียว* ที่คุณจะรู้ความจริงคือการส่งอะไรบางอย่างออกไปแล้วสังเกตว่าไม่มีอะไรกลับมา — ซึ่งนั่นคือสิ่งที่ heartbeat บวก deadline มอบให้คุณพอดี
+
+## จาก missed pong สู่การ termination
+
+เมื่อคุณตัดสินใจแล้วว่า connection ตาย อย่าสุภาพกับมัน การ `close()` อย่างสะอาดพยายามทำ handshake กับ peer ที่ *หายไปแล้ว* — ไม่มีใครให้ handshake ด้วย ดังนั้นมันอาจค้าง ให้ **terminate** แทน: ละทิ้ง socket ที่ตายแล้วทันทีและย้ายไป reconnect ตรง ๆ เบราว์เซอร์เปิดเผย `close()` ส่วน library `ws` ของ Node เพิ่ม `terminate()` มาเพื่อกรณีโหด ๆ แบบนี้โดยเฉพาะ Flow การตัดสินใจ:
+
+<Mermaid title="การตัดสินใจว่า connection ตายแล้ว" code={detectDiagram} />
+
+export const detectDiagram = `stateDiagram-v2
+  [*] --> Healthy
+  Healthy --> Waiting: send ping, pong now owed
+  Waiting --> Healthy: pong arrived in time
+  Waiting --> Suspect: deadline passed, pong missed
+  Suspect --> Healthy: a later pong arrived
+  Suspect --> Dead: misses exceeded threshold
+  Dead --> Terminate: abandon socket, do not handshake
+  Terminate --> [*]: hand off to reconnect`;
+
+## ดู missed pong ถูกตั้งธง
+
+เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง mock นี้ตอบ ping สองสามตัวแรกตามปกติ — แล้วก็เงียบไป จำลอง connection ที่ตายไปแล้วโดยไม่ยิง `onclose` (half-open connection) client รัน heartbeat ที่มี deadline และตั้งธงว่า connection ตายในวินาทีที่ pong เกินกำหนด
+
+export const deadDetectCode = `(function () {
+  // In-page socket with the real WebSocket API. This mock answers the first
+  // two pings, then goes SILENT to imitate a half-open connection: the socket
+  // still says OPEN but no pong ever returns and no onclose ever fires.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  class FlakySocket {
+    constructor() {
+      this.readyState = 0;
+      this.answered = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 30);
+    }
+    send(data) {
+      const msg = JSON.parse(data);
+      if (msg.type !== 'ping') return;
+      this.answered += 1;
+      if (this.answered <= 2) {
+        setTimeout(() => {
+          if (this.onmessage) this.onmessage({ data: JSON.stringify({ type: 'pong', seq: msg.seq }) });
+        }, 30);
+      }
+      // 3rd ping onward: silence. No pong, no close. The connection is a corpse.
+    }
+    close(code) { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000 }); }
+    terminate() { this.readyState = 3; /* no handshake — just gone */ }
+  }
+
+  const PING_MS = 600;
+  const ws = new FlakySocket();
+  let seq = 0;
+  let pongOutstanding = 0;
+  let timer = null;
+
+  ws.onopen = () => {
+    console.log('open — heartbeat with deadline started');
+    timer = setInterval(() => {
+      if (pongOutstanding >= 1) {
+        console.log('!! missed pong — pongs outstanding: ' + pongOutstanding);
+        if (pongOutstanding >= 2) {
+          console.log('connection declared DEAD — terminating (no clean handshake)');
+          clearInterval(timer);
+          ws.terminate();
+          console.log('socket abandoned — hand off to reconnect logic');
+          return;
+        }
+      }
+      seq += 1;
+      pongOutstanding += 1;
+      console.log('-> ping #' + seq + ' (pong now owed)');
+      ws.send(JSON.stringify({ type: 'ping', seq: seq }));
+    }, PING_MS);
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'pong') {
+      pongOutstanding = Math.max(0, pongOutstanding - 1);
+      console.log('<- pong #' + msg.seq + ' — debt cleared, connection healthy');
+    }
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={deadDetectCode} />
+
+คุณจะเห็น ping/pong ที่แข็งแรงสองคู่ จากนั้น mock ก็เงียบไป client ส่งต่อไปเรื่อย ๆ จำนวน pong ที่ไม่ได้รับคำตอบไต่สูงขึ้น และเมื่อมันข้ามเกณฑ์ client ก็ประกาศว่า connection ตายและ *terminate* มัน — โดยไม่เคยรอ `onclose` ที่ไม่มีวันมา นั่นคือการตรวจจับ: คุณหยุดเชื่อความเงียบและลงมือกับคำตอบที่หายไป
+
+<Callout title="การตรวจจับในหนึ่งบรรทัด">
+Connection ตายเมื่อ pong ที่ค้างอยู่ไม่มาถึงก่อน deadline ของมัน นับจำนวนการ miss ข้ามเกณฑ์เล็ก ๆ แล้ว **terminate** แทนการ close อย่างสุภาพ — เพราะ half-open peer หายไปแล้วและไม่เหลือใครให้ handshake ด้วย
+</Callout>
+
+export const quizDetect = [
+  {
+    q: 'อะไรคือสิ่งที่ตรวจจับ dead connection ได้จริง ๆ?',
+    options: [
+      'การส่ง ping บน timer ก็เพียงพอด้วยตัวมันเอง',
+      'ช่องว่างระหว่าง ping ที่ส่งไปกับ pong ที่ไม่เคยมาถึงก่อน deadline ของมัน',
+      'การรอ event onclose ของเบราว์เซอร์ ซึ่งยิงเสมอ',
+      'การอ่าน property readyState ครั้งเดียวตอนเริ่มต้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Half-open connection คืออะไร?',
+    options: [
+      'Connection ที่ถูกเข้ารหัสในทิศทางเดียวเท่านั้น',
+      'ฝ่ายหนึ่งเชื่อว่ามันยังเชื่อมต่ออยู่ในขณะที่อีกฝ่ายหายไปแล้วอย่างเงียบ ๆ โดยไม่มี close event ยิง',
+      'Connection ที่ยังอยู่ในเฟส handshake',
+      'Connection ที่ถูกจำกัดไว้ที่ครึ่งหนึ่งของ bandwidth ปกติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมต้อง terminate แทนการ close อย่างสะอาดสำหรับ connection ที่คุณประกาศว่าตายแล้ว?',
+    options: [
+      'การ terminate ถูกเข้ารหัส ส่วนการ close ไม่ถูกเข้ารหัส',
+      'การ close อย่างสะอาดพยายาม handshake กับ peer ที่หายไปแล้วและอาจค้าง ดังนั้นคุณจึงละทิ้ง socket แทน',
+      'Protocol ห้ามการ close dead connection',
+      'ไม่มีความแตกต่างระหว่างสองอย่างนี้',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/detecting-dead-connections" questions={quizDetect} />
+
+<ProgressTracker client:visible id="connection-lifecycle/detecting-dead-connections" />

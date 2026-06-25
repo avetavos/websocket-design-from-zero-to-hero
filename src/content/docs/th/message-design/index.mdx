@@ -1,0 +1,133 @@
+---
+title: 'การออกแบบ Message'
+description: 'WebSocket มอบสตรีมของ bytes และ text แบบสองทิศทางดิบ ๆ ให้คุณ ส่วนคุณคือคนออกแบบ message protocol ที่ทำให้มันมีความหมาย ภาพรวมและเดโม JSON message แรก'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+โมดูล foundations สอนคุณวิธีเปิด connection และส่ง bytes ไปมาทั้งสองทิศทาง แต่ connection ที่รับส่ง *อะไรก็ได้* นั้นไม่ได้บอกคุณ *เลย* ว่า bytes เหล่านั้นมีความหมายอะไร โมดูลนี้ — **การออกแบบ Message** — คือจุดที่คุณเลิกส่ง text ดิบ ๆ แล้วเริ่มส่ง **protocol**
+
+## socket นั้นว่างเปล่าโดยตั้งใจ
+
+นี่คือสิ่งที่ไม่มีใครบอกคุณตอนที่คุณหยิบ WebSocket มาใช้ครั้งแรก: API มอบ `send(data)` และ `onmessage(event)` ให้คุณ และนั่นคือ *ทั้งหมด* connection เป็นเหมือน **ท่อทึบ (opaque pipe)** มันยินดีจะรับส่ง string `'hi'` ก็ได้ JSON object ที่ถูกแปลงเป็น string ก็ได้ หรือ binary สักก้อนก็ได้ — และมันไม่มีความเห็นใด ๆ กับสิ่งเหล่านั้นเลย ไม่มีแนวคิดสำเร็จรูปของ "chat message", "request", "error" หรือ "version"
+
+ความว่างเปล่านั้นคือฟีเจอร์ ไม่ใช่ความบกพร่อง HTTP ฝัง headers, status codes, methods และการต่อรอง content ไว้ในตัว ส่วน WebSocket แทบไม่ฝังอะไรเลยเพื่อให้ *คุณ* ออกแบบบทสนทนาได้ตรงตามที่แอปพลิเคชันต้องการ ด้านกลับของมันคือความรับผิดชอบ: **message ของคุณจะมีโครงสร้างแบบไหน ก็เพราะคุณเป็นคนใส่มันลงไปเอง**
+
+<Mermaid title="ชั้นต่าง ๆ: transport รับส่ง bytes ส่วน protocol ของคุณรับส่งความหมาย" code={overviewDiagram} />
+
+export const overviewDiagram = `flowchart TB
+  subgraph app["Your application"]
+    a1["chat lines · presence · edits · requests"]
+  end
+  subgraph proto["Your message protocol — THIS module"]
+    p1["type · payload · id · version · schema"]
+  end
+  subgraph ws["WebSocket transport"]
+    w1["send(text or binary) · onmessage"]
+  end
+  app --> proto --> ws
+  ws -- "opaque bytes" --> ws`;
+
+ชั้นตรงกลางคือชั้นที่ไม่มีค่าเริ่มต้นใด ๆ การออกแบบมันให้ดีคือเส้นแบ่งระหว่าง protocol ที่คุณเติบโตมันต่อไปได้เป็นปี ๆ กับ protocol ที่กลายเป็นกองพันกันของ string ที่ต้องเขียนเงื่อนไขพิเศษเฉพาะกรณีไปเรื่อย ๆ
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+ห้าบทเรียน แต่ละบทเพิ่มหนึ่งแนวคิดสำคัญเข้าสู่ชุดเครื่องมือการออกแบบ message ของคุณ:
+
+1. **การออกแบบ Message (คุณอยู่ตรงนี้)** — ทำไม socket จึงว่างเปล่าและคุณคือคนใส่ความหมายลงไป
+2. **Framing messages** — WebSocket message นั้นแยกเป็นชิ้น ๆ อยู่แล้ว แต่คุณยังต้องมี protocol ระดับ *application* อยู่ดี หนึ่ง JSON object ต่อหนึ่ง message
+3. **JSON vs binary** — JSON ที่อ่านได้และใช้ได้ทุกที่ เทียบกับ format แบบ binary ที่กระชับอย่าง MessagePack, Protobuf และ CBOR และเมื่อไรแต่ละแบบจึงชนะ
+4. **Request/response over WebSocket** — socket นั้นเน้น message ไม่ใช่ request/reply คุณจึงเพิ่ม correlation `id` เพื่อจับคู่คำตอบกับคำถามของมัน
+5. **Schemas และ versioning** — message envelope การ validate สิ่งที่เข้ามา และการพัฒนา protocol โดยไม่ทำให้ client รุ่นเก่าพัง
+
+## message ที่มีโครงสร้างชิ้นแรก
+
+ด้านล่างคือก้าวที่เล็กที่สุดที่ขยับขึ้นมาจากการส่ง text เปล่า ๆ: การส่ง **JSON object** แล้ว parse มันที่อีกฝั่งหนึ่ง มันรันในเบราว์เซอร์ของคุณกับ echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง — `onopen`, `onmessage`, `send`, `close` แบบเดียวกัน — จึงไม่ต้องสตาร์ท server ใด ๆ ในแอปจริง มีเพียงบรรทัดแรกเท่านั้นที่เปลี่ยนเป็น `new WebSocket('wss://your-server')`
+
+สังเกตว่าทันทีที่เราส่ง *object* แทนที่จะเป็น string เปล่า ๆ ฝั่งรับสามารถถามคำถามที่มีความหมายได้: message นี้ *ชนิดอะไร*? *ใคร* เป็นคนส่ง? เมื่อไร?
+
+export const firstJsonCode = `(function () {
+  // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+
+  ws.onopen = () => {
+    // We do NOT send a bare string. We send a structured message, serialized to JSON text.
+    const message = { type: 'chat', from: 'alice', text: 'hello protocol', at: '12:00' };
+    console.log('sending object as JSON:', JSON.stringify(message));
+    ws.send(JSON.stringify(message));
+  };
+
+  ws.onmessage = (event) => {
+    // event.data is opaque text. WE decide it is JSON and parse it back into structure.
+    const msg = JSON.parse(event.data);
+    console.log('received a', msg.type, 'message');
+    console.log('  from:', msg.from);
+    console.log('  text:', msg.text);
+    ws.close();
+  };
+
+  ws.onclose = () => console.log('closed — one structured round-trip complete');
+})();`;
+
+<NodeRunner client:visible code={firstJsonCode} />
+
+socket รับส่ง text ทั้งสองทิศทางและไม่เคยสนใจเลยสักครั้งว่ามันคือ JSON โครงสร้าง — `type`, `from`, `text` — มีอยู่ได้ก็เพราะ *เรา* ตกลงกันและใส่มันลงไปเอง ทุกบทเรียนที่ตามมาคือการขัดเกลาข้อตกลงนั้นให้ดียิ่งขึ้น
+
+<Callout title="ใจความสำคัญในหนึ่งบรรทัด">
+WebSocket รับส่ง **สตรีมแบบทึบ (opaque stream)** ของ bytes และ text โดยไม่มีความหมายในตัว ส่วน message protocol — types, fields, ids, versions — คือสิ่งที่ **คุณออกแบบและวางทับลงไป** และโมดูลนี้จะแสดงให้คุณเห็นว่าทำอย่างไร
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'WebSocket transport ให้ความหมายอะไรกับข้อมูลที่คุณส่ง?',
+    options: [
+      'มันติด type และ timestamp ให้ทุก message',
+      'ไม่มีเลย — มันรับส่ง bytes และ text แบบทึบ ส่วนโครงสร้างคุณเป็นคนใส่เอง',
+      'มัน validate message กับ schema สำเร็จรูป',
+      'มันแปลง object เป็น JSON ให้อัตโนมัติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในเดโม ทำไมฝั่งรับจึงรู้ได้ว่าได้รับ message ชนิด "chat"?',
+    options: [
+      'WebSocket API เปิดเผย header ที่บอก message-type',
+      'เพราะเราแปลง object ที่มีโครงสร้างเป็น JSON แล้ว parse กลับมา อ่าน field "type" ของเราเอง',
+      'echo socket เพิ่ม field type ให้',
+      'JSON message มี type อยู่เสมอโดยค่าเริ่มต้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ข้อใดอธิบายบทบาทของชั้น message-protocol ได้ดีที่สุด?',
+    options: [
+      'มันถูกจัดเตรียมโดยเบราว์เซอร์และเปลี่ยนแปลงไม่ได้',
+      'มันอยู่ระหว่าง application ของคุณกับ transport เพื่อให้ความหมายแก่ bytes',
+      'มันเข้ามาแทนที่ WebSocket connection ทั้งหมด',
+      'มันจำเป็นเฉพาะกับข้อมูล binary เท่านั้น',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="message-design/index" />

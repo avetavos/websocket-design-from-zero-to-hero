@@ -1,0 +1,156 @@
+---
+title: 'Schemas และ Versioning'
+description: 'message envelope ที่มี type, version และ payload การ validate สิ่งที่เข้ามา และการพัฒนา protocol ที่ใช้งานจริงแบบเพิ่มเข้าไปโดยไม่ทำให้ client รุ่นเก่าพัง พร้อมเดโมที่รันได้'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+แอป WebSocket จริงไม่เคยถูก deploy เพียงครั้งเดียว server ปล่อยตัวแก้ไข client อัปเดตตามตารางของตัวเอง mobile build เก่ายังคงคุยกับ server ใหม่ต่อไปเป็น *เดือน ๆ* message protocol ของคุณต้องรอดผ่านความปั่นป่วนนั้น — และสองแนวคิดที่ทำให้มันรอดได้คือ **message envelope** และ **field version**
+
+## envelope
+
+แทนที่จะปล่อยให้ทุก message มีรูปร่างตามใจ จงตกลงกันเรื่องโครงสร้างภายนอกที่สม่ำเสมอ — **envelope** — แล้วใส่ข้อมูลเฉพาะของ message ไว้ข้างใน:
+
+- **`type`** — message นี้ชนิดอะไร (dispatch key จากบทเรียน framing)
+- **`v`** — version ของ protocol/schema ที่ message นี้ยึดตาม
+- **`payload`** — ข้อมูลจริง ส่วนที่แปรผันตาม `type`
+
+ทุก message ในทั้งสองทิศทาง หน้าตาเหมือนกันจากภายนอก โค้ด routing อ่าน `type` โค้ดความเข้ากันได้อ่าน `v` และมีเพียง handler เฉพาะแต่ละ type เท่านั้นที่แตะ `payload` message ที่ถูกต้องตามรูปแบบอ่านได้แบบ `{"type":"chat","v":1,"payload":{...}}`
+
+<Mermaid title="envelope ที่สม่ำเสมอห่อหุ้ม payload ที่แปรผัน" code={envelopeDiagram} />
+
+export const envelopeDiagram = `flowchart LR
+  subgraph env["Envelope — same for every message"]
+    t["type: what"]
+    v["v: which version"]
+    p["payload: the varying data"]
+  end
+  t --> route["dispatch / routing"]
+  v --> compat["compatibility handling"]
+  p --> handler["per-type handler"]`;
+
+## validate สิ่งที่เข้ามา — อย่าเชื่อ wire เด็ดขาด
+
+อะไรก็มาถึง socket ได้: client ที่มีบั๊ก, build เก่า, message ที่ผิดรูปแบบหรือแม้กระทั่งประสงค์ร้าย ก่อนที่ handler จะแตะ message **จง validate envelope**: มันต้อง parse เป็น JSON ได้ มี `type` ที่รู้จัก พก `v` และมี field ที่ `type` นั้นต้องการ ปฏิเสธสิ่งอื่นด้วยข้อความ error ที่ชัดเจนแทนที่จะปล่อยให้มันทำให้ handler crash กลางคัน ใน production คุณจะทำสิ่งนี้ด้วย schema library (Zod, Ajv/JSON Schema หรือ Protobuf validator ที่ถูก generate) หลักการเหมือนกันในทุกระดับขนาด: **ข้อมูลที่เข้ามาถือว่าไม่น่าเชื่อถือจนกว่าจะพิสูจน์ได้ว่าถูกต้องตามรูปแบบ**
+
+## พัฒนาแบบเพิ่มเข้าไป
+
+เมื่อ client อยู่ในมือผู้ใช้แล้ว คุณเปลี่ยนความหมายของ field ที่มีอยู่ไม่ได้ — client เก่ายังคงอ่านมันแบบเดิม กฎที่ทำให้ protocol ยังมีชีวิตอยู่:
+
+- **เพิ่ม อย่าเอามาใช้ใหม่** field ใหม่ที่เป็น optional ปลอดภัย client เก่าเพิกเฉยสิ่งที่ไม่รู้จัก client ใหม่อ่านข้อมูลเพิ่มเติม การ *ลบ* field หรือ *เปลี่ยนความหมายของมัน* จะทำให้ใครบางคนพัง
+- **bump `v` สำหรับการเปลี่ยนแปลงที่ breaking** เมื่อการเปลี่ยนแปลงเพิ่มแบบ additive ไม่ได้จริง ๆ จงยก version ขึ้นและให้ server รองรับค่า `v` ทั้งสองในช่วงเวลา migration โดยแตกแขนงตาม `v`
+- **ใส่ค่าเริ่มต้นให้สิ่งที่ขาดหาย** เมื่อ field ใหม่ไม่มีอยู่ (client เก่าไม่ได้ส่งมา) ฝั่งรับใส่ค่าเริ่มต้นที่สมเหตุสมผลแทนที่จะล้มเหลว
+
+นิสัยสามอย่างนี้ทำให้ client v1 และ v2 ใช้ server เดียวกันร่วมกันได้ไม่จำกัด
+
+## เดโม: validate แล้วค่อยพัฒนา
+
+เดโม validate ทุก envelope ที่เข้ามา แล้วแสดงการพัฒนาแบบ additive ในการทำงานจริง: server เข้าใจ `chat` message แบบ **v1** *และ* message แบบ **v2** ที่เพิ่ม field `lang` แบบ optional — จัดการได้ทั้งสองอย่าง และใส่ค่าเริ่มต้น `lang` เมื่อ client เก่าละไว้ message ที่จงใจทำให้ผิดรูปแบบถูกปฏิเสธ ไม่ได้ crash มันรันบน echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง
+
+export const schemaCode = `(function () {
+  // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 40); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  const KNOWN_TYPES = { chat: true, join: true };
+
+  // Validate the envelope before any handler runs.
+  function validate(raw) {
+    let msg;
+    try { msg = JSON.parse(raw); }
+    catch (e) { return { ok: false, error: 'not valid JSON' }; }
+    if (typeof msg !== 'object' || msg === null) return { ok: false, error: 'not an object' };
+    if (!KNOWN_TYPES[msg.type]) return { ok: false, error: 'unknown type: ' + msg.type };
+    if (typeof msg.v !== 'number') return { ok: false, error: 'missing version field v' };
+    if (!msg.payload) return { ok: false, error: 'missing payload' };
+    return { ok: true, msg: msg };
+  }
+
+  function handleChat(msg) {
+    // ADDITIVE EVOLUTION: v2 added an optional payload.lang. Older v1 messages omit it,
+    // so we default it. The same handler serves BOTH versions.
+    const lang = msg.payload.lang || 'en';
+    console.log('chat (v' + msg.v + ') [' + lang + ']:', msg.payload.text);
+  }
+
+  let processed = 0;
+  ws.onmessage = (event) => {
+    const result = validate(event.data);
+    if (!result.ok) {
+      console.log('REJECTED:', result.error); // never reaches a handler
+    } else if (result.msg.type === 'chat') {
+      handleChat(result.msg);
+    }
+    processed += 1;
+    if (processed === 3) ws.close();
+  };
+
+  ws.onopen = () => {
+    // 1) a v1 chat (no lang) — handler defaults lang to 'en'
+    ws.send(JSON.stringify({ type: 'chat', v: 1, payload: { text: 'hello' } }));
+    // 2) a v2 chat with the new optional lang field — same handler reads it
+    ws.send(JSON.stringify({ type: 'chat', v: 2, payload: { text: 'hola', lang: 'es' } }));
+    // 3) a malformed message — caught by validation, not by a crash
+    ws.send(JSON.stringify({ type: 'mystery', payload: {} }));
+  };
+
+  ws.onclose = () => console.log('done — v1 and v2 both handled, bad message safely rejected');
+})();`;
+
+<NodeRunner client:visible code={schemaCode} />
+
+message v1 และ message v2 ไหลผ่าน `handleChat` *เดียวกัน* ทั้งคู่ field `lang` ใหม่ปรากฏเฉพาะตรงที่มันถูกส่งมา และใส่ค่าเริ่มต้นเป็น `en` ตรงที่ไม่มี — นั่นคือการพัฒนาแบบ additive ที่กำลังทำงาน message ที่สามไม่เคยไปถึง handler เพราะ validation หยุดมันไว้ตั้งแต่หน้าประตู สร้างนิสัยสองอย่างนี้ตั้งแต่วันแรก แล้ว protocol ของคุณจะเติบโตได้เป็นปี ๆ โดยไม่ต้องมีวัน flag day
+
+<Callout title="ใจความสำคัญในหนึ่งบรรทัด">
+ห่อทุก message ด้วย **envelope** ที่สม่ำเสมอ (`type` + `v` + `payload`) **validate** สิ่งที่เข้ามาก่อนที่ handler ใด ๆ จะเชื่อมัน และ **พัฒนาแบบ additive** — เพิ่ม field ที่เป็น optional และ bump `v` สำหรับการเปลี่ยนแปลงที่ breaking — เพื่อให้ client เก่าและใหม่คุยกับ server เดียวกันได้ต่อไป
+</Callout>
+
+export const quizSchemas = [
+  {
+    q: 'จุดประสงค์ของ message envelope คืออะไร?',
+    options: [
+      'เพื่อบีบอัด payload ก่อนส่ง',
+      'เพื่อให้ทุก message มีรูปร่างภายนอกที่สม่ำเสมอ — type, version และ payload — สำหรับ routing และความเข้ากันได้',
+      'เพื่อแทนที่ WebSocket handshake',
+      'เพื่อเข้ารหัสเนื้อหาของ message',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมต้อง validate message ที่เข้ามาก่อนจัดการมัน?',
+    options: [
+      'เพราะ WebSocket รับประกันอยู่แล้วว่ามันถูกต้องตามรูปแบบ',
+      'เพราะ client ใด ๆ — ที่มีบั๊ก ล้าสมัย หรือประสงค์ร้าย — ส่งข้อมูลผิดรูปแบบมาได้ มันจึงไม่น่าเชื่อถือจนกว่าจะพิสูจน์ได้ว่าถูกต้อง',
+      'การ validate ทำให้ message เล็กลง',
+      'มันจำเป็นเฉพาะกับ binary frame เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'การเปลี่ยนแปลงใดที่ทำให้ client เก่ายังทำงานกับ server ใหม่ได้?',
+    options: [
+      'เปลี่ยนชื่อ field ที่มีอยู่ให้ชัดเจนขึ้น',
+      'เพิ่ม field ที่เป็น optional ใหม่ที่ client เก่าเพิกเฉยได้อย่างปลอดภัย',
+      'เปลี่ยนความหมายของ field ที่มีอยู่',
+      'ลบ field ที่ client เก่ายังอ่านอยู่',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/schemas-and-versioning" questions={quizSchemas} />
+
+<ProgressTracker client:visible id="message-design/schemas-and-versioning" />

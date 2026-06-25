@@ -1,0 +1,170 @@
+---
+title: 'Heartbeats'
+description: 'Why a TCP/WebSocket connection can look alive while being dead, protocol ping/pong frames versus app-level heartbeats, and a live ping/pong demo.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In the last lesson we said the silent slide from *live* to *dropped* is the transition apps forget. This lesson explains **why it is silent** — and gives you the one tool that breaks the silence: a heartbeat.
+
+## A quiet connection and a dead one look the same
+
+Here is the uncomfortable truth about an open socket: **doing nothing looks exactly like being broken**. If neither side has sent a message for thirty seconds, there are two possible explanations, and from the inside they are indistinguishable:
+
+- Everything is fine and nobody simply had anything to say.
+- The connection died ten seconds ago — a Wi-Fi handoff, a sleeping laptop, a load balancer that culled an idle stream — and the packets announcing its death never arrived.
+
+TCP itself does not rescue you here. TCP only learns a connection is broken when it tries to send and the acknowledgements never come. If your app is *idle*, TCP is idle too, so it never tries, so it never finds out. The operating system's built-in TCP keepalive can take **hours** to fire by default — useless for a real-time app. The result: your `WebSocket` object happily reports `readyState === 1` (OPEN) over a connection that has been rubble for minutes.
+
+The only cure is to **make traffic on purpose** at a known interval and check that it comes back. That is a heartbeat.
+
+## Two kinds of heartbeat
+
+There are two distinct mechanisms, and people muddle them constantly.
+
+- **Protocol ping/pong frames.** The WebSocket protocol defines special control frames: a *ping* frame and a *pong* frame. By spec, when an endpoint receives a ping it must reply with a pong. These live below your message handlers — they are part of the framing layer covered in the foundations module.
+- **Application-level heartbeats.** Ordinary messages your code sends and answers, like a JSON `{"type":"ping"}` your server replies to with `{"type":"pong"}`.
+
+Why ever build the app-level version when the protocol gives you ping/pong for free? Because **the browser does not let you use the protocol frames.** The browser's `WebSocket` API has no `ping()` method and fires no event when a ping or pong arrives — they are handled invisibly inside the browser. A browser *server* can send protocol pings to the browser, but browser *client* code cannot send or observe them. So in practice:
+
+- **Server to browser:** the server may use real protocol ping/pong to probe the browser.
+- **Browser to server:** the client must use app-level messages, because that is all it can see.
+
+Most production systems therefore run an **app-level** heartbeat so the same logic works on every platform. That is what we build below.
+
+## The heartbeat loop
+
+The shape of an app-level heartbeat is always the same:
+
+<Mermaid title="The app-level heartbeat loop" code={heartbeatDiagram} />
+
+export const heartbeatDiagram = `sequenceDiagram
+  participant C as Client
+  participant S as Server
+  loop every interval
+    C->>S: ping
+    S-->>C: pong
+    Note over C: pong seen — mark connection healthy
+  end`;
+
+In code it is an interval timer plus a small piece of state: send a ping every N seconds, and remember whether the matching pong came back. Here is the heart of it as plain TypeScript:
+
+```ts
+const HEARTBEAT_MS = 5000;
+
+function startHeartbeat(ws: WebSocket) {
+  const timer = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'ping', t: Date.now() }));
+  }, HEARTBEAT_MS);
+
+  ws.addEventListener('message', (event) => {
+    const msg = JSON.parse(event.data as string);
+    if (msg.type === 'pong') {
+      // The connection answered — it is genuinely alive right now.
+    }
+  });
+
+  ws.addEventListener('close', () => clearInterval(timer));
+}
+```
+
+Sending the ping is the easy half. The valuable half — *noticing when the pong never comes* — is the entire next lesson. For now, focus on the rhythm: a steady pulse, and an answer for each beat.
+
+## A live ping/pong
+
+The demo below uses an in-page socket with the real `WebSocket` API. The mock plays the role of a well-behaved server: every time it receives an app-level `ping` message, it replies with a `pong`. The client sends a ping every second and logs the round trip. Watch the heartbeat settle into its rhythm.
+
+export const pingPongCode = `(function () {
+  // In-page socket with the real WebSocket API. The mock acts as a healthy
+  // server: it answers every app-level {type:'ping'} with a {type:'pong'}.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  class HeartbeatSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 30);
+    }
+    send(data) {
+      const msg = JSON.parse(data);
+      if (msg.type === 'ping') {
+        // Healthy server: reply with a pong echoing the sequence number.
+        setTimeout(() => {
+          if (this.onmessage) this.onmessage({ data: JSON.stringify({ type: 'pong', seq: msg.seq }) });
+        }, 20);
+      }
+    }
+    close(code) { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000 }); }
+  }
+
+  const ws = new HeartbeatSocket();
+  let seq = 0;
+  let timer = null;
+  ws.onopen = () => {
+    console.log('open — starting heartbeat (1 ping/sec)');
+    timer = setInterval(() => {
+      if (ws.readyState !== 1) return;
+      seq += 1;
+      console.log('-> ping #' + seq);
+      ws.send(JSON.stringify({ type: 'ping', seq: seq }));
+    }, 1000);
+  };
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'pong') {
+      console.log('<- pong #' + msg.seq + ' — connection is alive');
+      if (msg.seq === 3) { clearInterval(timer); console.log('demo done — stopping heartbeat'); ws.close(); }
+    }
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={pingPongCode} />
+
+You will see pings going out and pongs coming back, one pair per second. Each returned pong is positive proof the connection was alive *at that instant* — not thirty seconds ago, not "probably". That is the whole point of a heartbeat: it converts silence, which tells you nothing, into a steady signal you can actually trust.
+
+<Callout title="Heartbeats in one line">
+A heartbeat is deliberate traffic on a timer. Protocol ping/pong frames exist but are invisible to browser client code, so apps send **app-level** ping/pong messages — turning ambiguous silence into proof the connection is still breathing.
+</Callout>
+
+export const quizHeartbeats = [
+  {
+    q: 'Why can an idle WebSocket look alive when it is actually dead?',
+    options: [
+      'The browser hides all errors on purpose',
+      'With no traffic, TCP never tries to send, so it never discovers the break — and OS keepalive can take hours',
+      'WebSockets disable TCP entirely',
+      'Dead connections always throw an exception immediately',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why do browser clients usually use app-level heartbeats instead of protocol ping/pong frames?',
+    options: [
+      'Protocol frames are slower',
+      'The browser WebSocket API cannot send protocol pings or observe pongs, so client code uses ordinary messages',
+      'App-level heartbeats are required by TCP',
+      'Protocol frames only work over plain HTTP',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In the demo, what does each returned pong prove?',
+    options: [
+      'That the server will never disconnect',
+      'That the connection was alive at that instant, converting silence into a trustworthy signal',
+      'That the message was encrypted',
+      'Nothing — pongs are decorative',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/heartbeats" questions={quizHeartbeats} />
+
+<ProgressTracker client:visible id="connection-lifecycle/heartbeats" />

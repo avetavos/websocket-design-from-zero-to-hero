@@ -1,0 +1,186 @@
+---
+title: 'Close Codes & Resume'
+description: 'Close handshake, ความหมายของ close code (1000, 1001, 1006, 1011, app code 4000+), การ shutdown อย่างสะอาด และการเล่นซ้ำ state ที่พลาดไปตอน reconnect ด้วย last-seen id'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+เราได้ครอบคลุมการจบของ connection โดยอุบัติเหตุไปแล้ว — drop, detection, reconnect บทเรียนสุดท้ายนี้ครอบคลุมการจบแบบ *ตั้งใจ*: close handshake ที่สะอาด code ตัวเลขที่อธิบายว่าทำไม connection ถึงจบ และผลตอบแทนของการทำ reconnection ให้ดี — การตามเก็บทุกอย่างที่คุณพลาดไปในระหว่างที่คุณหายไป
+
+## Close handshake
+
+การ close WebSocket อย่างสะอาดเป็นบทสนทนาสองขั้นตอนเล็ก ๆ ไม่ใช่การกระชากสายทิ้ง:
+
+1. ฝ่ายหนึ่งส่ง **close frame** ที่บรรจุ code ตัวเลขและ reason string สั้น ๆ ที่เป็น optional
+2. อีกฝ่ายตอบด้วย close frame ของตัวเอง
+3. หลังจากนั้นเท่านั้น TCP connection ที่อยู่เบื้องล่างจึงถูกรื้อทิ้ง
+
+นี่คือเหตุผลที่โมดูล foundations ยืนยันว่าการ close WebSocket นั้นสมมาตร เมื่อมันทำงาน ทั้งสองฝ่ายเห็นพ้องว่า connection จบแล้วและไม่มีใครเหลือให้เดา เบราว์เซอร์เปิดเผยสิ่งนี้ผ่าน event `onclose` ซึ่ง `event` ของมันบรรจุ `code`, `reason` และ flag `wasClean` ที่บอกคุณว่า handshake สมบูรณ์ทั้งหมดเสร็จสิ้นหรือไม่
+
+<Mermaid title="Close handshake ที่สะอาด" code={closeDiagram} />
+
+export const closeDiagram = `sequenceDiagram
+  participant A as Side A
+  participant B as Side B
+  A->>B: close frame (code, reason)
+  B-->>A: close frame (echo)
+  Note over A,B: TCP connection torn down
+  Note over A,B: onclose fires with wasClean = true`;
+
+## การอ่าน close code
+
+Code คือสาเหตุการตายของ connection การรู้จักมันบอกคุณว่าควร reconnect ยอมแพ้ หรือแก้บั๊ก ตัวที่สำคัญ:
+
+- **1000 — Normal Closure** ทุกอย่างจบลงตามที่ตั้งใจ การ `ws.close()` อย่างตั้งใจที่แอปของคุณเรียก **อย่า** auto-reconnect เมื่อเจอตัวนี้ การ close นั้นตั้งใจ
+- **1001 — Going Away** ฝ่ายหนึ่งกำลังจากไป — แท็บเบราว์เซอร์ที่กำลัง navigate ออกไป หรือ server ที่กำลัง shutdown เพื่อ deploy client ที่เห็น 1001 มักควร reconnect หลังจากสักครู่ server กำลังจะกลับมา
+- **1006 — Abnormal Closure** ตัวที่คุณเจอในบทเรียน drop มันหมายความว่า connection ตาย *โดยไม่มี* close frame ที่เหมาะสม — และที่สำคัญ **ไม่เคยมี code ใดถูกส่งผ่านสายสำหรับ 1006** เบราว์เซอร์สร้างมันขึ้นมาเองในเครื่องเพื่อบอกคุณว่า "อันนี้จบแบบผิดปกติ" ทุกการ drop โดยอุบัติเหตุปรากฏเป็น 1006 นี่คือสัญญาณให้คุณ reconnect ด้วย backoff
+- **1011 — Internal Error** server พบเงื่อนไขที่ไม่คาดคิดและกำลังจบ connection การ reconnect สมเหตุสมผล แต่ 1011 ที่เกิดต่อเนื่องหมายถึงบั๊กของ server ที่ต้องไล่ล่า
+- **4000-4999 — Application code** ช่วงนี้ทั้งหมดสงวนไว้สำหรับ *คุณ* protocol จะไม่มีวันนิยามมัน ดังนั้นมันจึงเป็นของคุณที่จะกำหนดความหมาย: `4001` อาจเป็น "auth token expired", `4002` "kicked by an admin", `4008` "you are rate limited" client สามารถแยกสาขาตามตัวเหล่านี้ได้ — refresh token แล้ว reconnect เมื่อเจอ `4001` แต่หยุดและแสดงข้อความเมื่อเจอ `4002`
+
+กฎในทางปฏิบัติ: **1000 หมายถึงหยุด ส่วนใหญ่ที่เหลือหมายถึง reconnect และ 4000+ หมายถึงทำสิ่งที่คุณตัดสินใจไว้ว่า code นั้นหมายถึงอะไร** ใส่ code เสมอ (และในอุดมคติคือ reason ด้วย) เมื่อ *คุณ* เป็นฝ่าย close เพื่อให้อีกฝ่ายตัดสินใจได้อย่างนั้นพอดี
+
+## การ shutdown อย่างสะอาด
+
+เมื่อแอปของคุณจบ connection อย่างตั้งใจ — ผู้ใช้ logout, navigate ออกไป หรือปิดฟีเจอร์ — ให้ close มัน *อย่างเหมาะสม*:
+
+```ts
+function shutdown(ws: WebSocket) {
+  // 1000 = normal. The peer learns this was intentional and will not reconnect.
+  ws.close(1000, 'client navigating away');
+}
+```
+
+เหตุผลที่การ close อย่างสะอาดสำคัญคือด้านกลับของทุกอย่างในโมดูลนี้: connection ที่จบด้วย code 1000 บอกอีกฝ่ายว่า "อย่า reconnect นี่ตั้งใจให้เกิดขึ้น" ถ้าข้ามมันไป คุณก็ทิ้งให้ server ถือ connection ผีที่มันต้อง heartbeat จนตาย — ก็คือความยุ่งเหยิงแบบ half-open ที่เราพยายามหลีกเลี่ยงพอดี
+
+## Resume — การเล่นซ้ำสิ่งที่คุณพลาด
+
+นี่คือรางวัลสำหรับกลไก reconnect ทั้งหมด เมื่อ client drop และกลับมา แอปแบบไร้เดียงสาจะมีรู: ทุกข้อความที่ server ส่งในระหว่างช่องว่างนั้นหายไป ทางรักษาคือ **resumable state ที่ key ด้วย last-seen id**
+
+รูปแบบ:
+
+1. server ประทับทุกข้อความด้วย id ที่เพิ่มขึ้นแบบ monotonic: `1, 2, 3, ...`
+2. client จำ id ของข้อความสุดท้ายที่มันประมวลผลสำเร็จ — `lastSeenId` ของมัน
+3. เมื่อ reconnect client ส่ง `lastSeenId` ไปยัง server เป็นส่วนหนึ่งของ resume request
+4. server เล่นซ้ำทุกข้อความที่มี id มากกว่า `lastSeenId` แล้วกลับมาส่งแบบสด
+
+client กลับมาที่จุดที่มันค้างไว้พอดี โดยไม่มีช่องว่างและไม่มีตัวซ้ำ (server ต้องมี buffer สั้น ๆ ของข้อความล่าสุดให้เล่นซ้ำจากมัน ช่องว่างที่เก่ามากจริง ๆ อาจต้อง refresh state ทั้งหมดแทน แต่สำหรับการ drop สั้น ๆ การเล่นซ้ำจะราบรื่น)
+
+## close-and-resume แบบสด
+
+เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง mock server ใส่เลขให้ทุกข้อความที่มันส่ง เราปล่อยให้ client รับสองสามตัว แล้ว connection ก็ drop (close code 1006) ในขณะที่ server ยังผลิตข้อความต่อไป เมื่อ reconnect client ส่ง `lastSeenId` ของมันและ server เล่นซ้ำข้อความที่มันพลาดไปพอดี — แล้วกลับมาส่งแบบสด
+
+export const resumeCode = `(function () {
+  // In-page socket with the real WebSocket API. The mock numbers every message
+  // and supports a {type:'resume', lastSeenId} request that replays the gap.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  const serverLog = [];           // every message the server has ever produced
+  let nextId = 1;
+  function produce(text) { const m = { id: nextId++, text: text }; serverLog.push(m); return m; }
+  // Pre-produce the messages that will exist during the demo's timeline.
+  produce('msg A'); produce('msg B'); produce('msg C');
+
+  class ResumableSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 20);
+    }
+    send(data) {
+      const msg = JSON.parse(data);
+      if (msg.type === 'resume') {
+        const missed = serverLog.filter((m) => m.id > msg.lastSeenId);
+        setTimeout(() => {
+          for (const m of missed) {
+            if (this.onmessage) this.onmessage({ data: JSON.stringify({ type: 'event', id: m.id, text: m.text }) });
+          }
+        }, 20);
+      }
+    }
+    deliver(m) { if (this.onmessage) this.onmessage({ data: JSON.stringify({ type: 'event', id: m.id, text: m.text }) }); }
+    drop() { this.readyState = 3; if (this.onclose) this.onclose({ code: 1006, wasClean: false }); }
+    close(code) { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000, wasClean: true }); }
+  }
+
+  let lastSeenId = 0;
+  let firstConnection = true;
+
+  function connect() {
+    const ws = new ResumableSocket();
+    ws.onopen = () => {
+      if (firstConnection) {
+        console.log('connected — receiving live messages');
+        // Deliver the first two messages live, then drop mid-stream.
+        ws.deliver(serverLog[0]);
+        ws.deliver(serverLog[1]);
+        setTimeout(() => { console.log('--- connection dropped while msg C was still pending ---'); ws.drop(); }, 30);
+      } else {
+        console.log('reconnected — requesting resume from lastSeenId=' + lastSeenId);
+        ws.send(JSON.stringify({ type: 'resume', lastSeenId: lastSeenId }));
+      }
+    };
+    ws.onmessage = (event) => {
+      const m = JSON.parse(event.data);
+      if (m.type === 'event') {
+        lastSeenId = m.id;
+        console.log('received id ' + m.id + ': ' + m.text + ' (lastSeenId now ' + lastSeenId + ')');
+      }
+    };
+    ws.onclose = (event) => {
+      if (event.wasClean) { console.log('closed cleanly, code', event.code); return; }
+      console.log('dropped, code ' + event.code + ' — reconnecting to resume');
+      firstConnection = false;
+      setTimeout(connect, 40);
+    };
+  }
+  connect();
+})();`;
+
+<NodeRunner client:visible code={resumeCode} />
+
+ดูลำดับ: client รับข้อความ 1 และ 2 แบบสด แล้ว connection ก็ drop (code 1006) ในขณะที่ข้อความ 3 ยังคิวอยู่บน server client reconnect ส่ง `lastSeenId=2` และ server เล่นซ้ำ *เฉพาะ* ข้อความ 3 — ไม่มีช่องว่าง ไม่มีตัวซ้ำของ 1 หรือ 2 การตามเก็บที่ราบรื่นนั้นคือสิ่งที่ทุกแอป real-time ที่สร้างมาดีทำอยู่เบื้องหลัง และมันเป็นไปได้ก็เพราะ reconnection และ last-seen id ทำงานร่วมกันเท่านั้น
+
+<Callout title="Close และ resume ในหนึ่งบรรทัด">
+Close อย่างสะอาดด้วย **code** (1000 = ตั้งใจ, 1006 = มันพัง, 4000+ = ความหมายของคุณเอง) เพื่อให้อีกฝ่ายรู้ว่าควร reconnect หรือไม่ จากนั้น ด้วยการประทับ id ให้ข้อความและจำ **last-seen id** ไว้ client ที่กำลัง reconnect จะเล่นซ้ำสิ่งที่มันพลาดได้พอดี — ปิดลูปของวงจรชีวิตทั้งหมด
+</Callout>
+
+export const quizClose = [
+  {
+    q: 'Close code 1006 (Abnormal Closure) บ่งบอกอะไร?',
+    options: [
+      'แอปพลิเคชัน close connection อย่างตั้งใจตามปกติ',
+      'connection ตายโดยไม่มี close frame ที่เหมาะสม — เบราว์เซอร์สร้าง 1006 ขึ้นมาเองในเครื่อง มันไม่เคยถูกส่งผ่านสาย',
+      'server กำลัง shutdown เพื่อ deploy ตามแผน',
+      'client ถูก rate limit',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'หลังจาก close code ใดที่ client โดยทั่วไป NOT ควร auto-reconnect?',
+    options: [
+      '1006 — Abnormal Closure',
+      '1011 — Internal Error',
+      '1000 — Normal Closure เพราะการ close นั้นตั้งใจ',
+      '1001 — Going Away',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'last-seen id ทำให้ client ที่กำลัง reconnect resume ได้โดยไม่มีช่องว่างหรือตัวซ้ำได้อย่างไร?',
+    options: [
+      'มัน re-download ประวัติทั้งหมดทุกครั้ง',
+      'client ส่ง last-seen id ของมันและ server เล่นซ้ำเฉพาะข้อความที่มี id มากกว่า',
+      'มันเข้ารหัส connection เพื่อให้ไม่มีอะไรหายไปเลย',
+      'มัน ping server จนกว่าข้อความเก่าทั้งหมดจะถูกส่งซ้ำแบบสุ่ม',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/close-codes-and-resume" questions={quizClose} />
+
+<ProgressTracker client:visible id="connection-lifecycle/close-codes-and-resume" />

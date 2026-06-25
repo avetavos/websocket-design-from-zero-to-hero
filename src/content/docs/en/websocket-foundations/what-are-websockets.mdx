@@ -1,0 +1,149 @@
+---
+title: 'What Are WebSockets?'
+description: 'One long-lived bidirectional connection versus many short HTTP exchanges, the use cases that need it, and a live echo demo.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In the first lesson we said a WebSocket is *one persistent, full-duplex connection*. This lesson slows down on **why that single sentence changes how you build software** — and lets you feel it with another live demo.
+
+## One connection, not many
+
+Picture how a browser normally talks to a server. Every interaction is a separate, self-contained errand:
+
+- Open a connection (or borrow a pooled one).
+- Send a request.
+- Receive a response.
+- The exchange is finished; the server forgets you.
+
+If a page needs ten pieces of information, that is, conceptually, ten errands. Each one carries its own headers, its own setup cost, and — crucially — only ever flows in the direction the **client** started. The server cannot speak first. It can only answer.
+
+A WebSocket replaces that whole pattern with a single open line:
+
+<Mermaid title="Many short HTTP exchanges versus one persistent WebSocket" code={shapeDiagram} />
+
+export const shapeDiagram = `flowchart TB
+  subgraph http["HTTP — many short exchanges"]
+    direction LR
+    c1["client"] -- "req 1" --> s1["server"]
+    s1 -- "res 1" --> c1
+    c2["client"] -- "req 2" --> s2["server"]
+    s2 -- "res 2" --> c2
+    c3["client"] -- "req 3" --> s3["server"]
+    s3 -- "res 3" --> c3
+  end
+  subgraph ws["WebSocket — one persistent connection"]
+    direction LR
+    cw["client"] <--> sw["server"]
+  end`;
+
+Once that line is open, sending a message is cheap: there is no new connection to negotiate and no per-request header overhead. And because the line is genuinely two-way, the server can deliver a message the instant something happens — a new chat line, a price change, another user's edit — without the client ever having asked.
+
+## The defining difference
+
+It helps to put the two side by side as plain prose rather than a diagram:
+
+- **HTTP request/response** is *client-initiated and one-shot*. The client asks; the server answers; done. To learn about a new event, the client must ask again.
+- **A WebSocket** is *either-side-initiated and continuous*. After a one-time setup, both ends hold the same connection open and push messages across it for as long as they like.
+
+That shift — from "ask again and again" to "stay connected and listen" — is the entire value proposition.
+
+## Where WebSockets shine
+
+WebSockets are the right tool whenever the server needs to **push** information the client could not have predicted:
+
+- **Chat and messaging** — a message from one user must reach others immediately, with no polling.
+- **Live data feeds** — prices, scores, sensor readings, dashboards that update as the world changes.
+- **Collaboration** — shared documents, whiteboards, and design tools where every keystroke or cursor move propagates to everyone.
+- **Notifications and presence** — "a new order arrived", "Sam is typing", "your build finished".
+- **Multiplayer and games** — low-latency state updates flying both ways many times a second.
+
+The common thread: events originate on the server side at unpredictable times, and latency matters. That is exactly the gap a persistent, bidirectional connection fills.
+
+## Feel it live
+
+Run the demo below. It uses an in-page echo socket with the real `WebSocket` API — same `onopen`/`onmessage`/`send`/`close` — so it runs anywhere with no server. It sends one line and prints whatever comes back. Notice how, after the single `open`, the connection just *sits there ready* — you could send again at any moment without reconnecting.
+
+export const liveEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app this line is: const ws = new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+        if (this.onmessage) this.onmessage({ data: 'Welcome — this echo server repeats whatever you send.' });
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  let echoes = 0;
+  ws.onopen = () => {
+    console.log('connection is open and ready');
+    ws.send('first message from the browser');
+  };
+  ws.onmessage = (event) => {
+    echoes += 1;
+    console.log('received:', event.data);
+    if (echoes === 2) {
+      console.log('connection is still open — closing it ourselves now');
+      ws.close();
+    }
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={liveEchoCode} />
+
+The first `received:` line is the server's greeting on connect; the second is our own message echoed back. We close only after the second one — proving the connection stayed open and usable the whole time, which is precisely what HTTP request/response cannot offer.
+
+<Callout title="The one-line takeaway">
+HTTP is a sequence of short, client-asked errands. A WebSocket is one connection that stays open so **either** side can send a message whenever it wants — which is what real-time chat, live feeds, and collaboration actually need.
+</Callout>
+
+export const quizWhat = [
+  {
+    q: 'What most fundamentally distinguishes a WebSocket from HTTP request/response?',
+    options: [
+      'WebSockets use a different port number',
+      'A WebSocket keeps one connection open so either side can send at any time',
+      'WebSockets compress data automatically',
+      'WebSockets only work over TLS',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which scenario is the strongest fit for WebSockets?',
+    options: [
+      'Downloading a single large file once',
+      'Serving a static marketing page',
+      'A live chat where messages must reach users the moment they are sent',
+      'Submitting a form that returns a thank-you page',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'After the demo prints its first "received" line, why can it send or close without reconnecting?',
+    options: [
+      'It opens a brand-new connection for each action',
+      'The single connection stays open and ready after the handshake',
+      'The browser caches the server response',
+      'HTTP keep-alive reuses the socket for it',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="websocket-foundations/what-are-websockets" questions={quizWhat} />
+
+<ProgressTracker client:visible id="websocket-foundations/what-are-websockets" />

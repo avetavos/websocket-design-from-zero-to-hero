@@ -1,0 +1,159 @@
+---
+title: 'Events and readyState'
+description: 'The four WebSocket events — open, message, close, error — and the readyState field that tracks the four connection states, with a live demo.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+A WebSocket is an event-driven object. Your code does not poll it or block on it; instead you attach handlers and let the connection call you back when something happens. There are exactly **four** events, and a single field — `readyState` — that always tells you where you are. Master these and the API holds no surprises.
+
+## The four events
+
+Every browser WebSocket fires the same four events, no more:
+
+- **`open`** — the handshake succeeded; the connection is now `OPEN` and ready to use. This is the only safe place to begin sending.
+- **`message`** — a message arrived from the peer. The payload is on `event.data`.
+- **`close`** — the connection has shut down. The event carries a numeric `event.code` and a `event.reason` string explaining why.
+- **`error`** — something went wrong. It is informational and intentionally vague (for security); a `close` event almost always follows.
+
+You can attach handlers two ways. The `on*` properties are the quickest:
+
+```ts
+const ws = new WebSocket('wss://example.com');
+ws.onopen    = ()      => console.log('open');
+ws.onmessage = (event) => console.log('data:', event.data);
+ws.onerror   = ()      => console.log('error');
+ws.onclose   = (event) => console.log('closed', event.code, event.reason);
+```
+
+Or `addEventListener`, which lets you attach more than one handler per event:
+
+```ts
+ws.addEventListener('message', (event) => console.log(event.data));
+```
+
+## readyState: the four numbers
+
+While the events tell you *when* things change, `readyState` tells you the current state *at any instant*. It is a number, and the class exposes named constants for each value:
+
+```ts
+WebSocket.CONNECTING; // 0 — handshake in progress
+WebSocket.OPEN;       // 1 — ready to send and receive
+WebSocket.CLOSING;    // 2 — close handshake underway
+WebSocket.CLOSED;     // 3 — finished, or never opened
+
+if (ws.readyState === WebSocket.OPEN) {
+  ws.send('safe to send now');
+}
+```
+
+The two views line up neatly: the `open` event fires as you enter state `1`, and the `close` event fires as you enter state `3`. Checking `ws.readyState === WebSocket.OPEN` before sending is the standard guard against the "I tried to send too early or too late" bug.
+
+## How events and states interlock
+
+This is the same lifecycle from lesson one, now annotated with the event that fires on each transition:
+
+<Mermaid title="States on the nodes, events on the transitions" code={eventsDiagram} />
+
+export const eventsDiagram = `stateDiagram-v2
+  [*] --> CONNECTING: new WebSocket()
+  CONNECTING --> OPEN: open event
+  CONNECTING --> CLOSED: error then close event
+  OPEN --> CLOSING: close() / peer closes
+  CLOSING --> CLOSED: close event
+  OPEN --> CLOSED: drop, then close event
+  note right of OPEN: message events may fire repeatedly here
+  CLOSED --> [*]`;
+
+The `message` event is special: it is not a transition. It can fire any number of times while you sit in `OPEN`, which is exactly the point of a persistent connection.
+
+## Watch the transitions live
+
+The demo uses an in-page echo socket with the real `WebSocket` API, so it runs anywhere with no server. It logs `readyState` at every step using the named constants. In a real app only the first line — `new WebSocket('wss://your-server')` — would differ.
+
+export const stateEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  const names = { 0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSING', 3: 'CLOSED' };
+  class EchoSocket {
+    constructor() {
+      this.CONNECTING = 0; this.OPEN = 1; this.CLOSING = 2; this.CLOSED = 3;
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code, reason) {
+      this.readyState = 2;
+      setTimeout(() => { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000, reason: reason || '' }); }, 10);
+    }
+  }
+
+  const ws = new EchoSocket();
+  console.log('after construct:', names[ws.readyState]);
+  ws.onopen = () => {
+    console.log('open event - readyState:', names[ws.readyState]);
+    ws.send('ping');
+  };
+  ws.onmessage = (event) => {
+    console.log('message event - data:', event.data, '- readyState still', names[ws.readyState]);
+    ws.close(1000, 'done');
+    console.log('right after close():', names[ws.readyState]);
+  };
+  ws.onclose = (event) => {
+    console.log('close event - readyState:', names[ws.readyState], '- code', event.code, '- reason', event.reason);
+  };
+})();`;
+
+<NodeRunner client:visible code={stateEchoCode} />
+
+Trace the output against the diagram: `CONNECTING` at construction, `OPEN` in the `open` handler, still `OPEN` when the `message` arrives, `CLOSING` the moment `close()` is called, and `CLOSED` by the time the `close` event fires — carrying the code `1000` and reason we passed.
+
+<Callout title="The two views, one truth">
+Four events tell you *when* the connection changes; `readyState` (0/1/2/3, or the named constants) tells you *where* it is right now. Guard your sends with `readyState === WebSocket.OPEN`, and read `code` and `reason` off the `close` event to learn why it ended.
+</Callout>
+
+export const quizEvents = [
+  {
+    q: 'Which event can fire many times during a single connection?',
+    options: [
+      'open',
+      'message',
+      'close',
+      'error',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What numeric value does WebSocket.OPEN correspond to?',
+    options: [
+      '0',
+      '1',
+      '2',
+      '3',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where do you find out why a connection ended?',
+    options: [
+      'On the open event',
+      'On the error event only',
+      'On the close event, via code and reason',
+      'In ws.readyState alone',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="the-client-api/events-and-readystate" questions={quizEvents} />
+
+<ProgressTracker client:visible id="the-client-api/events-and-readystate" />

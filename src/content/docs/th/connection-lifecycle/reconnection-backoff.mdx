@@ -1,0 +1,174 @@
+---
+title: 'Reconnection & Backoff'
+description: 'การ reconnect อัตโนมัติด้วย exponential backoff, jitter และ cap เพื่อให้คุณฟื้นตัวโดยไม่กระหน่ำ server ที่กำลังดิ้นรน — พร้อมเดโมสดที่ log ดีเลย์ที่เพิ่มขึ้น'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ตอนนี้คุณ *ตรวจจับ* dead connection ได้แล้ว ปฏิกิริยาตามธรรมชาติคือ reconnect ทันที ปฏิกิริยานั้น เมื่อคูณด้วย client หลายพันตัว คือวิธีที่คุณเปลี่ยน server ที่กะพริบหายไปแวบหนึ่งให้กลายเป็นการล่มทั้งระบบ บทเรียนนี้เป็นเรื่องของการ reconnect ในแบบที่รักษา client ของคุณ **โดยไม่** เตะ server ของคุณซ้ำในขณะที่มันล้มอยู่
+
+## ทำไม "แค่ reconnect" ถึงอันตราย
+
+ลองนึกภาพ server รีสตาร์ตและ drop connection หนึ่งหมื่นตัวพร้อมกัน ถ้าทุก client retry ทันที แล้ว retry ทันทีอีกครั้งเมื่อล้มเหลว server ก็จะถูกถล่มด้วยความพยายามเชื่อมต่อหนึ่งหมื่นครั้งทุก ๆ ไม่กี่มิลลิวินาทีในวินาทีที่มันพยายามจะกลับมา มันจะพังลงภายใต้พายุ reconnect ก่อนที่มันจะ boot เสร็จด้วยซ้ำ นี่คือ **thundering herd** และลูป `while (failed) reconnect()` แบบไร้เดียงสาคือเครื่องยนต์ของมัน
+
+วิธีแก้มีส่วนประกอบสามอย่าง และคุณต้องการทั้งสามอย่าง:
+
+- **Exponential backoff** — รอนานขึ้นหลังจากแต่ละครั้งที่ล้มเหลว ไม่ใช่ช่วงเวลาสั้น ๆ เท่าเดิม
+- **Jitter** — สุ่มเวลารอเพื่อให้ client ไม่ retry พร้อมเพรียงกันทั้งหมด
+- **Cap** — หยุดไม่ให้ดีเลย์โตจนยาวเกินเหตุ
+
+## Exponential backoff
+
+แทนที่จะ retry ทุกวินาทีตลอดไป ให้เพิ่มดีเลย์เป็นสองเท่าทุกครั้งที่คุณล้มเหลว: 1s, 2s, 4s, 8s, 16s... คณิตศาสตร์ก็แค่ base delay คูณด้วยสองยกกำลังหมายเลขครั้ง:
+
+```ts
+const BASE_MS = 1000;
+const CAP_MS = 30000;
+
+function backoffDelay(attempt: number): number {
+  const exponential = BASE_MS * Math.pow(2, attempt);
+  return Math.min(exponential, CAP_MS); // never wait longer than the cap
+}
+```
+
+**Cap** สำคัญพอ ๆ กับการเติบโต ถ้าไม่มีมัน หลังจากล้มเหลวสักโหลครั้ง คุณจะต้องรอ *เป็นชั่วโมง* ระหว่างความพยายามแต่ละครั้ง และผู้ใช้ที่เปิดแลปท็อปกลับมาก็จะนั่งจ้องแอปที่ disconnect อยู่ตลอดกาล Cap ที่ เช่น 30 วินาที หมายความว่า server ที่ฟื้นตัวจะถูกเจออีกครั้งอย่างรวดเร็วแม้หลังจากการล่มที่ยาวนาน
+
+## Jitter — ส่วนประกอบที่ทุกคนลืม
+
+Backoff อย่างเดียวแก้ปัญหา *ความถี่* แต่ไม่แก้ปัญหา *การซิงค์กัน* ถ้า client ทั้งหนึ่งหมื่นตัวถูก drop ในขณะเดียวกันและทั้งหมดใช้ตาราง backoff เดียวกัน พวกมันจะรอ 1s พร้อมกันทั้งหมด แล้ว 2s ทั้งหมด แล้ว 4s ทั้งหมด — retry เป็นคลื่นที่ซิงค์กันอย่างสมบูรณ์แบบ ที่กระหน่ำ server เป็นจังหวะ ๆ ซึ่งแย่พอ ๆ กับพายุดั้งเดิม
+
+**Jitter** ทำลายการซิงค์กันด้วยการเพิ่มความสุ่มเข้าไปในแต่ละดีเลย์ รูปแบบที่ง่ายและได้ผลคือ "full jitter": เลือกดีเลย์สุ่มที่ไหนก็ได้ระหว่างศูนย์กับ backoff ที่คำนวณไว้
+
+```ts
+function jittered(attempt: number): number {
+  const ceiling = backoffDelay(attempt);
+  return Math.random() * ceiling; // full jitter: 0..ceiling
+}
+```
+
+ตอนนี้ client กระจาย retry ของพวกมันอย่างราบรื่นไปทั่วแต่ละหน้าต่างแทนที่จะถล่ม server พร้อมกัน Jitter ราคาถูก หนึ่งบรรทัด และเป็นสิ่งสำคัญที่สุดสิ่งเดียวที่แยกการ reconnect ที่สุภาพออกจาก DDoS ที่ก่อขึ้นเอง
+
+## ลูป reconnect ในรูปแบบ state machine
+
+<Mermaid title="Reconnect ด้วย capped exponential backoff และ jitter" code={backoffDiagram} />
+
+export const backoffDiagram = `stateDiagram-v2
+  [*] --> Connected
+  Connected --> Disconnected: drop detected
+  Disconnected --> Waiting: compute min(base*2^n, cap), apply jitter
+  Waiting --> Connecting: delay elapsed
+  Connecting --> Connected: success, reset attempt to 0
+  Connecting --> Disconnected: failed, attempt += 1
+  Connected --> [*]: closed on purpose`;
+
+รายละเอียดสองอย่างทำให้ลูปนี้สำเร็จหรือพัง อย่างแรก **รีเซ็ตตัวนับ attempt เป็นศูนย์เมื่อ connect สำเร็จ** — มิฉะนั้น connection ที่สำเร็จและ drop ในภายหลังจะเริ่ม backoff ครั้งถัดไปจากดีเลย์มหึมาที่มันจบไว้ อย่างที่สอง **หยุดทั้งหมดเมื่อมีการ close อย่างตั้งใจ** เพื่อที่คุณจะไม่ฝืนกับผู้ใช้ที่เลือกจะ disconnect
+
+## ดูดีเลย์โตขึ้น
+
+เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง mock ถูกตั้งค่าให้ *drop* — มันยิง `onclose` ด้วย code 1006 ที่ผิดปกติไม่นานหลังจากแต่ละ open — สำหรับความพยายามไม่กี่ครั้งแรก แล้วในที่สุดก็อยู่ติด ลูป reconnect log ดีเลย์ที่ถูก cap และ jitter ที่มันรอก่อนแต่ละความพยายาม เพื่อให้คุณดู backoff ทำงานได้
+
+export const backoffCode = `(function () {
+  // In-page socket with the real WebSocket API. This mock DROPS (onclose with
+  // code 1006) a few times before finally staying connected, so we can watch a
+  // reconnect loop back off. In a real app: const ws = new WebSocket('wss://...').
+  let globalAttempt = 0;
+  class DroppingSocket {
+    constructor() {
+      this.readyState = 0;
+      globalAttempt += 1;
+      const willDrop = globalAttempt <= 4; // succeed on the 5th attempt
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+        if (willDrop) {
+          setTimeout(() => {
+            this.readyState = 3;
+            if (this.onclose) this.onclose({ code: 1006, wasClean: false });
+          }, 40);
+        }
+      }, 20);
+    }
+    close(code) { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000, wasClean: true }); }
+  }
+
+  const BASE_MS = 100;   // small base so the demo runs fast
+  const CAP_MS = 1200;
+  let attempt = 0;
+
+  function delayFor(n) {
+    const exp = Math.min(BASE_MS * Math.pow(2, n), CAP_MS); // capped exponential
+    return Math.round(Math.random() * exp);                 // full jitter
+  }
+
+  function connect() {
+    console.log('connecting (attempt ' + (attempt + 1) + ')...');
+    const ws = new DroppingSocket();
+    ws.onopen = () => console.log('  open');
+    ws.onclose = (event) => {
+      if (event.wasClean) { console.log('  closed cleanly, code', event.code); return; }
+      const wait = delayFor(attempt);
+      console.log('  dropped (code ' + event.code + ') — backing off ' + wait + 'ms before retry');
+      attempt += 1;
+      setTimeout(() => {
+        if (attempt > 4) {
+          // The 5th connection stays up — reset the counter and finish.
+          console.log('reconnected and stable — resetting attempt counter to 0');
+          attempt = 0;
+        }
+        connect();
+      }, wait);
+    };
+  }
+  connect();
+})();`;
+
+<NodeRunner client:visible code={backoffCode} />
+
+ดูตัวเลข `backing off ...ms` ไต่ขึ้นประมาณ 100, 200, 400, 800 — ถูก cap และสุ่มด้วย jitter ดังนั้นมันจะไม่ใช่กำลังสองพอดี — แล้วในที่สุด connection ก็อยู่ติดและตัวนับ attempt ก็รีเซ็ต ดีเลย์ที่โตขึ้น สุ่ม และถูก cap นั้นคือความแตกต่างระหว่าง client ที่ช่วย server ที่กำลังฟื้นตัว กับ client ที่ฝัง server
+
+<Callout title="Reconnection ในหนึ่งบรรทัด">
+อย่า reconnect ในลูปที่กระชั้น รอนานขึ้นหลังจากแต่ละครั้งที่ล้มเหลว (**exponential backoff**) สุ่มแต่ละเวลารอ (**jitter**) อย่าเกินเพดานที่สมเหตุสมผล (**cap**) รีเซ็ตตัวนับเมื่อสำเร็จ และหยุดเมื่อมีการ close อย่างตั้งใจ
+</Callout>
+
+export const quizBackoff = [
+  {
+    q: 'ทำไมการ reconnect ทันทีในลูปที่กระชั้นถึงอันตราย?',
+    options: [
+      'มันใช้แบตเตอรี่บน server มากเกินไป',
+      'Client หลายพันตัว retry พร้อมกันสร้าง thundering herd ที่อาจขัดขวางไม่ให้ server ฟื้นตัว',
+      'WebSocket protocol แบนการ reconnect แบบเร็ว',
+      'การ reconnect ทันทีถูกปฏิเสธโดยเบราว์เซอร์เสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Jitter แก้ปัญหาอะไรโดยเฉพาะที่ backoff อย่างเดียวแก้ไม่ได้?',
+    options: [
+      'มันเข้ารหัสความพยายาม reconnect',
+      'มัน de-synchronize client เพื่อให้พวกมันไม่ retry เป็นคลื่นเดียวกันทั้งหมด',
+      'มันทำให้ดีเลย์โตเร็วขึ้น',
+      'มันลบความจำเป็นในการมี cap',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมคุณต้องรีเซ็ตตัวนับ attempt เป็นศูนย์หลังจาก connect สำเร็จ?',
+    options: [
+      'เพื่อปฏิบัติตามข้อกำหนดของ TLS',
+      'เพื่อให้การ drop ในภายหลังเริ่ม backoff จากดีเลย์สั้น ๆ อีกครั้งแทนที่จะเป็นดีเลย์มหึมาที่มันไปถึง',
+      'เพราะมิฉะนั้นตัวนับจะ overflow',
+      'คุณไม่ควรรีเซ็ตมันเลย',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/reconnection-backoff" questions={quizBackoff} />
+
+<ProgressTracker client:visible id="connection-lifecycle/reconnection-backoff" />

@@ -1,0 +1,96 @@
+---
+title: 'Security'
+description: 'พื้นผิวความปลอดภัยของ WebSocket — ไม่มี same-origin protection โดยปริยาย, auth ที่อยู่ยาว, การทำ authorization ราย message, และการถูกใช้งานในทางที่ผิด — พร้อมกับสิ่งที่โมดูลนี้ครอบคลุม'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ทุกอย่างที่ผ่านมาเป็นเรื่องของการทำให้ WebSocket **ทำงานได้** โมดูลนี้เป็นเรื่องของการทำให้มัน **ปลอดภัย** การเชื่อมต่อแบบยืนยาวและสองทิศทางเป็นเครื่องมือที่ยอดเยี่ยมและเป็นพื้นผิวการโจมตีที่ใจกว้างอย่างผิดปกติ: มันเปิดค้างไว้, มันรับส่ง message จำนวนมาก, และ — ต่างจาก fetch — เบราว์เซอร์จะยอมให้หน้าเว็บจาก *ที่ไหนก็ได้* เปิดการเชื่อมต่อไปยังเซิร์ฟเวอร์ของคุณอย่างเต็มใจ ถ้าคุณยกสัญชาตญาณด้านความปลอดภัยแบบ HTTP มาใช้ตรง ๆ คุณจะผิดในบางจุดที่เฉพาะเจาะจงและอันตราย
+
+## รูปร่างของปัญหา
+
+การเชื่อมต่อ WebSocket มีอายุที่ยาวกว่าและแปลกกว่า HTTP request และแต่ละช่วงก็นำความเสี่ยงของตัวเองมาด้วย:
+
+- **ไม่มี same-origin protection โดยปริยาย** same-origin policy ของเบราว์เซอร์และ CORS preflight **ไม่** มีผลกับการอัปเกรด WebSocket หน้าเว็บใด ๆ ก็เรียก `new WebSocket('wss://your-server')` ได้ และ handshake จะถูกพยายามทำ ถ้าเซิร์ฟเวอร์ของคุณไม่ตรวจ `Origin` header เอง เว็บไซต์ที่ประสงค์ร้ายสามารถอาศัย cookie ของผู้ใช้ที่ล็อกอินอยู่เพื่อเข้าไปใน socket ของคุณได้ตรง ๆ — นี่คือ WebSocket เวอร์ชันของ CSRF
+- **Authentication ที่อยู่ยาว** HTTP request ทำ authenticate แล้วก็จบในเสี้ยววินาที WebSocket ทำ authenticate ครั้งเดียวแล้วอาจเปิดค้างนานเป็นชั่วโมง ตัวตนที่คุณยืนยันไว้ตอน handshake คือตัวตนที่คุณไว้ใจตลอดทั้ง session แม้จะนานหลังจาก token เดิมอาจหมดอายุไปแล้ว
+- **Authorization ราย message** บนการเชื่อมต่อเดียว ไคลเอนต์ส่ง message ที่ต่างกันมากมาย — subscribe, publish, edit, delete การทำ authenticate การเชื่อมต่อบอกคุณว่า *ใคร* อยู่ตรงนั้น มันไม่ได้บอกอะไรเลยว่า *message ตัวนี้โดยเฉพาะ* ได้รับอนุญาตหรือไม่ ทุก message คือการตัดสินใจ authorization ครั้งใหม่
+- **การใช้งานในทางที่ผิดและการทำให้ทรัพยากรหมด** socket ที่เปิดอยู่คือคำเชิญให้ถล่มคุณ: message หลายพันต่อวินาที, frame ขนาดหลายเมกะไบต์, หรือเพียงแค่การถล่มด้วยการเชื่อมต่อแบบครึ่งเปิดที่ไม่ทำ handshake ให้จบ ถ้าไม่มีลิมิต ไคลเอนต์ตัวเดียวก็สามารถทำให้ทุกตัวอื่นอดอยากได้
+
+## แผนที่ของพื้นผิว
+
+<Mermaid title="ความกังวลด้านความปลอดภัยแต่ละอย่างอยู่ตรงไหนในอายุของการเชื่อมต่อ" code={surfaceDiagram} />
+
+export const surfaceDiagram = `flowchart TB
+  A["Browser opens<br/>wss:// connection"] --> B{"Handshake"}
+  B -- "check Origin header" --> C{"Authenticate<br/>(cookie / token)"}
+  C -- "reject: close 1008" --> X["Connection refused"]
+  C -- "accept" --> D["Open connection<br/>(identity is now fixed)"]
+  D --> E["For every message"]
+  E --> F{"Authorize THIS action<br/>against the identity"}
+  F -- "rate limit + size cap + validate" --> G["Process message"]
+  F -- "deny" --> H["Reject / close"]`;
+
+อ่านไดอะแกรมนั้นจากบนลงล่างแล้วคุณก็จะได้ทั้งโมดูล: ป้องกัน **handshake**, จากนั้นป้องกัน **ทุก message**, และคอยจับตา **ทรัพยากร** ตลอดเวลา แต่ละกล่องจะกลายเป็นหนึ่งบทเรียน
+
+## ใช้ `wss` เสมอ ไม่ใช่ `ws`
+
+ก่อนหน้าทั้งหมดนั้น มีกฎหนึ่งที่อยู่เหนือทุกอย่าง: ใน production คุณใช้ **`wss://`** ซึ่งเป็น scheme ที่เข้ารหัสด้วย TLS เหมือนกับที่คุณใช้ `https://` เป๊ะ ๆ การเชื่อมต่อ `ws://` ธรรมดาจะส่ง frame — รวมถึง auth token และทุก message ของคุณ — เป็น cleartext ที่ใครก็ตามบนเส้นทางเครือข่ายอ่านหรือดัดแปลงได้ ที่แย่กว่านั้น หน้าเว็บที่เสิร์ฟผ่าน `https://` ไม่ได้ *ถูกอนุญาต* ให้เปิดการเชื่อมต่อ `ws://` ด้วยซ้ำ เบราว์เซอร์จะบล็อกการดาวน์เกรดแบบ mixed-content จงมอง `ws://` เป็นเพียงความสะดวกในการพัฒนาบน localhost เท่านั้น ไม่มีอะไรมากกว่านั้น เราจะกลับมาดู TLS อย่างละเอียดในบทเรียนสุดท้าย
+
+## โมดูลนี้ครอบคลุมอะไร
+
+โมดูลนี้ — **Security** — เดินสำรวจพื้นผิวข้างต้นทีละชั้น:
+
+1. **Security (คุณอยู่ตรงนี้)** — พื้นผิวโดยรวมและเหตุผลที่ความปลอดภัยของ WebSocket ต่างจาก HTTP
+2. **Origin and handshake auth** — ทำไม WebSocket จึงไม่ถูกป้องกันด้วย CORS, วิธี validate `Origin` header, และวิธีทำ authenticate ระหว่าง handshake โดยไม่ทำให้ token รั่ว
+3. **Authorization** — authenticate ครั้งเดียว จากนั้นทำ authorize **ทุก** message เทียบกับตัวตนจริงของการเชื่อมต่อ
+4. **Rate limiting and validation** — rate limit แบบ token-bucket, การจำกัดขนาด message, และการ parse ทุก message อย่างระแวดระวัง
+5. **TLS and DoS** — `wss`/TLS, การจำกัดการเชื่อมต่อต่อ IP, slowloris และ handshake flood, และการ authenticate ก่อนที่จะจัดสรรทรัพยากร
+
+เมื่อจบ คุณจะมี checklist ที่รันกับ WebSocket service ใด ๆ ได้: origin ถูกตรวจไหม, handshake ถูก authenticate ไหม, แต่ละ message ถูก authorize ไหม, flood และ frame ที่ใหญ่เกินถูกจำกัดไหม, และทั้งหมดอยู่บน TLS ไหม
+
+<Callout title="เบราว์เซอร์จะไม่ปกป้องคุณตรงนี้">
+ต่างจาก `fetch`, การอัปเกรด `WebSocket` แบบข้าม origin จะ **ไม่ส่ง CORS preflight** และ **ไม่** ถูกบล็อกโดย same-origin policy เบราว์เซอร์ส่ง `Origin` header มาบน handshake — แต่มันเป็นหน้าที่ของ *เซิร์ฟเวอร์ของคุณ* ที่จะอ่านมันและปฏิเสธ origin ที่ไม่คาดคิด ถ้าคุณข้ามการตรวจนั้น เว็บไซต์ใด ๆ ก็เปิด socket ที่ authenticate แล้วไปยังเซิร์ฟเวอร์ของคุณในนามของผู้ใช้ที่ล็อกอินอยู่ได้
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Why is a WebSocket upgrade not protected the way a cross-origin fetch is?',
+    options: [
+      'WebSockets always run over TLS, so CORS is unnecessary',
+      'The same-origin policy and CORS preflight do not apply to WebSocket upgrades — the server must check the Origin header itself',
+      'Browsers refuse all cross-origin WebSocket connections automatically',
+      'WebSockets cannot send cookies, so there is nothing to protect',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Authenticating a WebSocket connection at the handshake tells you what?',
+    options: [
+      'That every message the connection sends is automatically allowed',
+      'Who is on the connection — but not whether any given message is permitted',
+      'That the connection can never be abused',
+      'That TLS is in use',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the rule about scheme in production?',
+    options: [
+      'Use ws:// because it is faster',
+      'Use wss:// (TLS) — ws:// sends frames in cleartext and is blocked from https pages as mixed content',
+      'Either scheme is fine as long as you check the Origin',
+      'Use ws:// and rely on the firewall',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="security/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="security/index" />

@@ -1,0 +1,108 @@
+---
+title: 'The WebSocket Handshake'
+description: 'How a WebSocket connection begins as an ordinary HTTP GET with an Upgrade header and a 101 Switching Protocols response.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+A WebSocket does not appear out of thin air. It starts life as a perfectly ordinary HTTP request and is then *upgraded* in place. Understanding this handshake demystifies a great deal: why WebSockets travel on the same ports as web traffic, why they pass through most proxies and firewalls, and why the `ws://` and `wss://` schemes mirror `http://` and `https://`.
+
+## It begins as HTTP
+
+The client opens a normal TCP connection and sends an HTTP `GET` request — but with special headers that say "I would like to switch this connection to the WebSocket protocol." The two headers that do the real work are `Upgrade: websocket` and `Sec-WebSocket-Key`.
+
+```http
+GET /chat HTTP/1.1
+Host: example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+Origin: https://example.com
+```
+
+A few of these earn their place:
+
+- **`Upgrade: websocket`** and **`Connection: Upgrade`** together signal the protocol switch.
+- **`Sec-WebSocket-Key`** is a random, base64-encoded value the client generates fresh for this connection. It is *not* a security secret; it exists so the client can confirm the response came from a server that genuinely understood the WebSocket handshake.
+- **`Sec-WebSocket-Version: 13`** pins the protocol version (13 is the standard one).
+
+## The 101 response
+
+If the server speaks WebSocket and accepts, it replies with status **`101 Switching Protocols`** — an HTTP status that means exactly "we are done with HTTP semantics on this connection; from here on it is a different protocol."
+
+```http
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+The magic is in **`Sec-WebSocket-Accept`**. The server takes the client's `Sec-WebSocket-Key`, appends a fixed, well-known string defined by the spec, hashes the result with SHA-1, and base64-encodes it. The client computes the same value and checks for a match. If they agree, the client knows it is talking to a real WebSocket server and not, say, a cache that blindly returned a `101`. No match, no connection.
+
+## The handshake, in order
+
+<Mermaid title="The upgrade from HTTP request to live WebSocket" code={handshakeDiagram} />
+
+export const handshakeDiagram = `sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: TCP connection established
+  C->>S: GET /chat HTTP/1.1 (Upgrade: websocket, Sec-WebSocket-Key)
+  Note over S: validate headers, compute Sec-WebSocket-Accept
+  S-->>C: HTTP/1.1 101 Switching Protocols (Sec-WebSocket-Accept)
+  Note over C,S: same TCP connection — now speaking WebSocket
+  C->>S: data frame
+  S->>C: data frame`;
+
+Notice what the diagram does *not* show: a second connection. After the `101`, the client and server keep using the **same TCP connection** they already had. Nothing is reopened. The HTTP request was simply the doorway; once through it, both sides stop exchanging HTTP messages and start exchanging WebSocket frames (the subject of the next lesson).
+
+## Why this design is clever
+
+Because the handshake *is* an HTTP request, a WebSocket connection can ride on ports 80 and 443 alongside normal web traffic, reuse existing TLS for `wss://`, and slip through the proxies and load balancers that already understand HTTP. The protocol gets the reach of the web for free, then sheds HTTP's request/response model the instant it no longer needs it.
+
+<Callout title="The thing to remember">
+A WebSocket **begins as an HTTP GET** carrying `Upgrade: websocket`, and the server answers `101 Switching Protocols`. After that, the very same TCP connection is reused — no reconnect — to carry WebSocket frames in both directions.
+</Callout>
+
+export const quizHandshake = [
+  {
+    q: 'What HTTP status code does the server return to accept a WebSocket upgrade?',
+    options: [
+      '200 OK',
+      '101 Switching Protocols',
+      '301 Moved Permanently',
+      '426 Upgrade Required',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the purpose of Sec-WebSocket-Key and Sec-WebSocket-Accept?',
+    options: [
+      'They encrypt all WebSocket traffic',
+      'They let the client confirm the response came from a real WebSocket server',
+      'They authenticate the logged-in user',
+      'They compress the handshake headers',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'After the 101 response, what happens to the connection?',
+    options: [
+      'A new TCP connection is opened for frames',
+      'The same TCP connection is reused to carry WebSocket frames',
+      'The client polls over HTTP from then on',
+      'The server closes it and waits for a reconnect',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="websocket-foundations/the-handshake" questions={quizHandshake} />
+
+<ProgressTracker client:visible id="websocket-foundations/the-handshake" />

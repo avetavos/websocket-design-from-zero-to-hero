@@ -1,0 +1,122 @@
+---
+title: 'Server Design'
+description: 'What a WebSocket server actually does — accept upgrades, track connections, route messages, and broadcast — plus a live Node ws server demo.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+So far this course has lived mostly on the **client** side — opening a socket, sending frames, watching messages arrive. This module flips the camera around. A WebSocket server is a long-running process that holds **many** open connections at once and decides who hears what. That is a genuinely different mental model from an HTTP handler, and getting it right is the difference between a demo and a system.
+
+## What a WebSocket server actually does
+
+An HTTP server thinks in terms of one request, one response, then forget you. A WebSocket server cannot afford to forget you — you are still on the line. Strip the job down and it is really four responsibilities:
+
+- **Accept upgrades.** A connection begins life as an ordinary HTTP request carrying an `Upgrade: websocket` header. The server validates it and switches the socket over to the WebSocket protocol. From that point on it is a persistent pipe, not a request.
+- **Track connections.** Every accepted socket has to be remembered. The server keeps a live set of who is connected so it can find them again later — to push an update, to count them, or to clean up when they leave.
+- **Route messages.** When a frame arrives, the server reads it and decides what it means: a chat line for one room, a subscription request, a ping, a command. Routing turns raw bytes into application behaviour.
+- **Broadcast.** The headline trick. Because the server holds every open socket, it can deliver a single event to *many* clients at once — the moment it happens, with nobody having asked.
+
+Notice that three of those four are things an ordinary HTTP server never has to do. Tracking, routing across a persistent connection, and fan-out only make sense once connections **stay open**.
+
+## One server, many clients
+
+A useful way to picture a WebSocket server is as a hub holding one wire to each client. A message from any single client can come in, be processed, and then go back out to one client, a subset, or everyone:
+
+<Mermaid title="One server holding a persistent connection to many clients" code={hubDiagram} />
+
+export const hubDiagram = `flowchart TB
+  subgraph clients["Connected clients"]
+    A["client A"]
+    B["client B"]
+    C["client C"]
+    D["client D"]
+  end
+  S["WebSocket server<br/>(tracks every open socket)"]
+  A <--> S
+  B <--> S
+  C <--> S
+  D <--> S
+  A -. "sends one message" .-> S
+  S == "broadcast to all" ==> B
+  S == "broadcast to all" ==> C
+  S == "broadcast to all" ==> D`;
+
+The double-headed lines are the persistent connections; the thick lines are a single inbound message being fanned out to everyone else. Hold onto that shape — almost everything in this module is a refinement of it.
+
+## What this module covers
+
+This module — **Server Design** — builds the server-side half of your WebSocket knowledge, one layer at a time:
+
+1. **Server Design (you are here)** — the four jobs of a server and a first live `ws` server.
+2. **A WebSocket server** — the `ws` library: `WebSocketServer`, the `connection` event, `ws.on('message')`, and `ws.send`.
+3. **Connection state** — attaching per-socket data (user id, subscriptions) and cleaning it up on close.
+4. **Rooms and broadcast** — grouping clients into channels and fanning a message out to a room versus everyone.
+5. **Backpressure** — what happens when a slow client cannot keep up, and how to protect the server's memory.
+
+## A first live server
+
+The demos in this module are **real Node servers** built on the [`ws`](/websocket-design-from-zero-to-hero/en/the-client-api/) library — the most widely used WebSocket library for Node. Open any of them in **StackBlitz** to run a genuine `WebSocketServer`, then `npm run client` in a second terminal to connect.
+
+Throughout this module, the code you see is the **body of the connection handler** — it runs once per connected client, with three identifiers already in scope: `ws` (this client's socket), `wss` (the server, for broadcast), and `req` (the upgrade request). The example below greets each new client, echoes whatever they send, and logs when they leave.
+
+export const helloServerCode = `// Runs once per connected client. ws/wss/req are in scope.
+ws.send('welcome — you are connected to a real ws server');
+
+ws.on('message', (data) => {
+  const text = data.toString();
+  console.log('server received:', text);
+  ws.send(\`echo: \${text}\`);
+});
+
+ws.on('close', () => console.log('a client disconnected'));`;
+
+<NodeRunner node client:visible code={helloServerCode} />
+
+When you connect the client, the server sends a greeting immediately, then echoes your message back with an `echo:` prefix. That `ws.send` on connect — before the client says anything — is the part HTTP can never do: the server speaks first. Everything else in this module builds on holding that connection open and deciding what to send across it.
+
+<Callout title="The server's four jobs">
+A WebSocket server **accepts upgrades**, **tracks** every open connection, **routes** incoming messages, and **broadcasts** to many clients at once. Three of those four exist only because connections stay open — that persistence is the whole reason server design differs from HTTP.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Which responsibility is unique to a WebSocket server and not part of an ordinary HTTP handler?',
+    options: [
+      'Returning a 200 status code',
+      'Tracking every open connection so it can push to them later',
+      'Parsing a URL path',
+      'Reading request headers',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does a WebSocket connection begin?',
+    options: [
+      'As a raw TCP socket with no HTTP involved',
+      'As an ordinary HTTP request carrying an Upgrade: websocket header',
+      'As a UDP datagram',
+      'As a second HTTP response to a prior request',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why can the demo server send a "welcome" message before the client sends anything?',
+    options: [
+      'The client secretly requested it first',
+      'The connection stays open, so the server can push at any time',
+      'HTTP keep-alive delivered it',
+      'The browser cached the greeting',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-design/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="server-design/index" />

@@ -1,0 +1,108 @@
+---
+title: 'The WebSocket Handshake'
+description: 'การเชื่อมต่อ WebSocket เริ่มต้นในฐานะ HTTP GET ธรรมดาพร้อม Upgrade header และ response แบบ 101 Switching Protocols ได้อย่างไร'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+WebSocket ไม่ได้โผล่ขึ้นมาจากอากาศ มันเริ่มต้นชีวิตในฐานะ HTTP request ที่ธรรมดาสมบูรณ์แบบ แล้วจึงถูก *upgrade* ในที่ การเข้าใจ handshake นี้คลายความลึกลับได้มากมาย: ทำไม WebSocket ถึงเดินทางบนพอร์ตเดียวกันกับทราฟฟิกเว็บ ทำไมมันถึงผ่าน proxy และ firewall ส่วนใหญ่ได้ และทำไม scheme `ws://` และ `wss://` ถึงสะท้อน `http://` และ `https://`
+
+## มันเริ่มต้นในฐานะ HTTP
+
+ไคลเอนต์เปิด TCP connection ธรรมดาและส่ง HTTP `GET` request — แต่พร้อม header พิเศษที่บอกว่า "ฉันอยากสลับการเชื่อมต่อนี้ไปเป็นโปรโตคอล WebSocket" สอง header ที่ทำงานจริงคือ `Upgrade: websocket` และ `Sec-WebSocket-Key`
+
+```http
+GET /chat HTTP/1.1
+Host: example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+Origin: https://example.com
+```
+
+มีบางตัวในนี้ที่สมควรกับตำแหน่งของมัน:
+
+- **`Upgrade: websocket`** และ **`Connection: Upgrade`** ทำงานร่วมกันเพื่อส่งสัญญาณการสลับโปรโตคอล
+- **`Sec-WebSocket-Key`** เป็นค่าสุ่มที่เข้ารหัส base64 ซึ่งไคลเอนต์สร้างขึ้นใหม่สำหรับการเชื่อมต่อนี้ มัน *ไม่ใช่* ความลับด้านความปลอดภัย มันมีอยู่เพื่อให้ไคลเอนต์ยืนยันได้ว่า response มาจากเซิร์ฟเวอร์ที่เข้าใจ WebSocket handshake อย่างแท้จริง
+- **`Sec-WebSocket-Version: 13`** ตรึงเวอร์ชันของโปรโตคอลไว้ (13 คือเวอร์ชันมาตรฐาน)
+
+## Response แบบ 101
+
+ถ้าเซิร์ฟเวอร์พูด WebSocket ได้และยอมรับ มันจะตอบกลับด้วยสถานะ **`101 Switching Protocols`** — สถานะ HTTP ที่มีความหมายตรงตัวว่า "เราเสร็จสิ้นกับ semantics ของ HTTP บนการเชื่อมต่อนี้แล้ว จากนี้ไปมันเป็นโปรโตคอลที่ต่างออกไป"
+
+```http
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+ความมหัศจรรย์อยู่ที่ **`Sec-WebSocket-Accept`** เซิร์ฟเวอร์นำ `Sec-WebSocket-Key` ของไคลเอนต์มา ต่อท้ายด้วยสตริงคงที่ที่รู้จักกันดีซึ่งกำหนดโดย spec แฮชผลลัพธ์ด้วย SHA-1 แล้วเข้ารหัส base64 ไคลเอนต์คำนวณค่าเดียวกันและตรวจสอบว่าตรงกันไหม ถ้าตรงกัน ไคลเอนต์ก็รู้ว่ามันกำลังคุยกับเซิร์ฟเวอร์ WebSocket จริง ๆ ไม่ใช่ เช่น cache ที่คืน `101` กลับมาแบบมั่ว ๆ ไม่ตรงกัน ก็ไม่มีการเชื่อมต่อ
+
+## Handshake ตามลำดับ
+
+<Mermaid title="การ upgrade จาก HTTP request ไปสู่ WebSocket แบบสด" code={handshakeDiagram} />
+
+export const handshakeDiagram = `sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: TCP connection established
+  C->>S: GET /chat HTTP/1.1 (Upgrade: websocket, Sec-WebSocket-Key)
+  Note over S: validate headers, compute Sec-WebSocket-Accept
+  S-->>C: HTTP/1.1 101 Switching Protocols (Sec-WebSocket-Accept)
+  Note over C,S: same TCP connection — now speaking WebSocket
+  C->>S: data frame
+  S->>C: data frame`;
+
+สังเกตสิ่งที่ไดอะแกรม *ไม่ได้* แสดง: การเชื่อมต่อเส้นที่สอง หลัง `101` ไคลเอนต์และเซิร์ฟเวอร์ยังคงใช้ **TCP connection เดิม** ที่มีอยู่แล้วต่อไป ไม่มีอะไรถูกเปิดใหม่ HTTP request เป็นเพียงประตูทางเข้า เมื่อผ่านมันไปแล้ว ทั้งสองฝ่ายหยุดแลกเปลี่ยนข้อความ HTTP และเริ่มแลกเปลี่ยน WebSocket frame (หัวข้อของบทเรียนถัดไป)
+
+## ทำไมการออกแบบนี้ถึงฉลาด
+
+เพราะ handshake *คือ* HTTP request การเชื่อมต่อ WebSocket จึงสามารถวิ่งบนพอร์ต 80 และ 443 เคียงข้างทราฟฟิกเว็บปกติ นำ TLS ที่มีอยู่มาใช้ซ้ำสำหรับ `wss://` และลอดผ่าน proxy และ load balancer ที่เข้าใจ HTTP อยู่แล้ว โปรโตคอลได้ระยะเอื้อมของเว็บมาฟรี ๆ แล้วจึงสลัด request/response model ของ HTTP ทิ้งทันทีที่ไม่ต้องการมันอีกต่อไป
+
+<Callout title="สิ่งที่ต้องจำ">
+WebSocket **เริ่มต้นในฐานะ HTTP GET** ที่แบก `Upgrade: websocket` และเซิร์ฟเวอร์ตอบ `101 Switching Protocols` หลังจากนั้น TCP connection เดิมเป๊ะ ๆ จะถูกนำกลับมาใช้ซ้ำ — ไม่มีการเชื่อมต่อใหม่ — เพื่อขนส่ง WebSocket frame ในทั้งสองทิศทาง
+</Callout>
+
+export const quizHandshake = [
+  {
+    q: 'เซิร์ฟเวอร์ตอบกลับด้วย HTTP status code อะไรเพื่อยอมรับการ upgrade ไปเป็น WebSocket?',
+    options: [
+      '200 OK',
+      '101 Switching Protocols',
+      '301 Moved Permanently',
+      '426 Upgrade Required',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จุดประสงค์ของ Sec-WebSocket-Key และ Sec-WebSocket-Accept คืออะไร?',
+    options: [
+      'มันเข้ารหัสทราฟฟิก WebSocket ทั้งหมด',
+      'มันให้ไคลเอนต์ยืนยันได้ว่า response มาจากเซิร์ฟเวอร์ WebSocket จริง ๆ',
+      'มันยืนยันตัวตนผู้ใช้ที่ล็อกอินอยู่',
+      'มันบีบอัด header ของ handshake',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'หลังจาก response 101 เกิดอะไรขึ้นกับการเชื่อมต่อ?',
+    options: [
+      'มีการเปิด TCP connection ใหม่สำหรับ frame',
+      'TCP connection เดิมถูกนำกลับมาใช้ซ้ำเพื่อขนส่ง WebSocket frame',
+      'ไคลเอนต์ poll ผ่าน HTTP ต่อจากนั้นไป',
+      'เซิร์ฟเวอร์ปิดมันแล้วรอการเชื่อมต่อใหม่',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="websocket-foundations/the-handshake" questions={quizHandshake} />
+
+<ProgressTracker client:visible id="websocket-foundations/the-handshake" />

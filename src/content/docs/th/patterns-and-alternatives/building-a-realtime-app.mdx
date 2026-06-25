@@ -1,0 +1,182 @@
+---
+title: 'Building a Real-Time App'
+description: 'ผูกทุกอย่างเข้าด้วยกัน — บริการแชต/แจ้งเตือนเล็ก ๆ พร้อม rooms, heartbeat, auth และ reconnect ที่รันบนเซิร์ฟเวอร์ Node ws จริง'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+นี่คือบทสรุปปิดท้าย ทุกโมดูลก่อนหน้าเพิ่มหนึ่งความสามารถ ที่นี่เราประกอบมันเข้าเป็นบริการ real-time เล็ก ๆ ตัวเดียว — แชตแบบอิงห้องพร้อมการแจ้งเตือน — และรันมันบนเซิร์ฟเวอร์ Node `ws` ของจริง เป้าหมายไม่ใช่ทฤษฎีใหม่ แต่คือการได้ดูชิ้นส่วนที่คุณรู้จักอยู่แล้วประกอบเข้าด้วยกันเป็นสิ่งที่ยืนหยัดได้จริง: **auth** ตอน connect, **rooms** สำหรับ routing, **heartbeat** เพื่อตรวจจับลิงก์ที่ตายแล้ว และรูปร่างบนสายที่อยู่รอด **reconnect**
+
+## ภาพรวมของการออกแบบ
+
+บริการ real-time คือ pipeline ที่แต่ละการเชื่อมต่อไหลผ่าน เมื่อ socket มาถึงเรา authenticate มัน ผูก state ต่อการเชื่อมต่อ ให้มันเข้า rooms route message ของมัน และรักษามันให้มีชีวิตด้วย heartbeat จนกว่ามันจะจากไป:
+
+<Mermaid title="วงจรชีวิตของการเชื่อมต่อหนึ่งในบริการ" code={appDiagram} />
+
+export const appDiagram = `flowchart TD
+  open["Client connects<br/>(token in query / first message)"] --> auth{"Token valid?"}
+  auth -- "No" --> reject["close(4401)<br/>unauthorized"]
+  auth -- "Yes" --> attach["Attach state:<br/>userId, rooms, isAlive"]
+  attach --> ready["Send 'ready'<br/>client can subscribe"]
+  ready --> route["Route messages:<br/>join / leave / chat"]
+  route --> beat["Heartbeat:<br/>ping every 30s, expect pong"]
+  beat -- "no pong" --> dead["terminate dead socket"]
+  route -- "client gone" --> clean["close -> leave all rooms"]`;
+
+แต่ละกล่อง map ไปยังโมดูลที่คุณทำมาแล้ว: auth คือ [security](/websocket-design-from-zero-to-hero/th/security/), state ต่อการเชื่อมต่อและ rooms คือ [server design](/websocket-design-from-zero-to-hero/th/server-design/), heartbeat คือ [connection lifecycle](/websocket-design-from-zero-to-hero/th/connection-lifecycle/) และ message envelope คือ [message design](/websocket-design-from-zero-to-hero/th/message-design/) บทสรุปปิดท้ายก็แค่การต่อสายเข้าด้วยกัน
+
+## สี่ส่วนผสม
+
+- **Auth ตอน connect.** ปฏิเสธ socket ที่ไม่ได้ authenticate ทันทีด้วย custom close code เพื่อให้ client รู้ว่าไม่ควร retry แบบหลับหูหลับตา ที่นี่เราอ่าน token ง่าย ๆ จาก URL ของ upgrade request ใน production มันจะเป็น session ที่ verify แล้วหรือ JWT (ดู [โมดูล security](/websocket-design-from-zero-to-hero/th/security/))
+- **Rooms.** แต่ละการเชื่อมต่อพก `Set` ของ rooms ที่มันเข้าร่วม message แชตถูกส่งเฉพาะให้ socket อื่นใน room เดียวกัน — [pattern แบบ pub/sub](/websocket-design-from-zero-to-hero/th/patterns-and-alternatives/pubsub-and-rooms/) จากก่อนหน้านี้ในโมดูลนี้ ที่กำหนดขอบเขตอยู่กับกลุ่ม
+- **Heartbeat.** TCP อาจเงียบไปได้โดยไม่มี error event — แล็ปท็อปหลับ โทรศัพท์สัญญาณหาย `ping` แบบเป็นช่วงพร้อม `pong` ที่คาดหวังคือวิธีที่เซิร์ฟเวอร์เรียนรู้ว่าการเชื่อมต่อตายไปแล้วจริง ๆ และเรียกคืนมัน แทนที่จะ broadcast เข้าสู่ความว่างเปล่าตลอดไป
+- **ความเป็นมิตรต่อ reconnect.** เซิร์ฟเวอร์ reconnect แทน client ไม่ได้ แต่มันทำให้การ reconnect ราคาถูกได้: `join` ที่สะอาดและ idempotent เพื่อให้ client ที่กลับมาเพียงแค่ประกาศ rooms ของตัวเองใหม่ และ close code ที่เสถียรเพื่อให้ client รู้ว่าควร retry (ชั่วคราว) หรือหยุด (auth ล้มเหลว)
+
+## wire protocol
+
+ทำให้มันชัดเจนอย่างน่าเบื่อ — แท็ก `type` และฟิลด์ที่แต่ละ type ต้องการ:
+
+```ts
+// client -> server
+type ClientMessage =
+  | { type: 'join'; room: string }
+  | { type: 'leave'; room: string }
+  | { type: 'chat'; room: string; text: string };
+
+// server -> client
+type ServerMessage =
+  | { type: 'ready'; userId: string }
+  | { type: 'joined'; room: string }
+  | { type: 'chat'; room: string; from: string; text: string }
+  | { type: 'error'; message: string };
+```
+
+## รันเซิร์ฟเวอร์จริง
+
+ด้านล่างคือ **เนื้อตัวของ connection handler** สำหรับเซิร์ฟเวอร์ `ws` จริง — `ws` (socket นี้), `wss` (เซิร์ฟเวอร์ สำหรับ broadcast เข้า room) และ `req` (upgrade request) อยู่ใน scope แล้ว มัน authenticate จาก query parameter `?token=` ผูก state ต่อการเชื่อมต่อ จัดการ join/leave/chat ด้วย broadcast ที่ขอบเขตอยู่กับ room และรัน heartbeat ต่อ socket เปิดมันใน StackBlitz รัน `npm start` แล้วเชื่อม client (เพิ่ม `?token=alice` ลงใน URL) จากนั้นดู join, chat ที่ขอบเขตอยู่กับ room และ heartbeat ใน log ของเซิร์ฟเวอร์
+
+export const serverCode = `// Body of wss.on('connection', (ws, req) => { ... }). ws/wss/req in scope.
+
+// --- 1. Auth: read a token from the upgrade URL. Reject if missing. ---
+const url = new URL(req.url || '/', 'http://localhost');
+const token = url.searchParams.get('token');
+if (!token) {
+  ws.send(JSON.stringify({ type: 'error', message: 'missing token' }));
+  ws.close(4401, 'unauthorized'); // 4401 = our app-level "auth failed"
+  return;
+}
+const userId = token; // in production: verify a JWT / session here
+
+// --- 2. Per-connection state ---
+const state = { userId, rooms: new Set(), isAlive: true };
+
+// --- 3. Heartbeat: ping every 30s; terminate if no pong came back ---
+ws.on('pong', () => { state.isAlive = true; });
+const heartbeat = setInterval(() => {
+  if (!state.isAlive) {
+    console.log(userId, 'missed heartbeat — terminating');
+    clearInterval(heartbeat);
+    return ws.terminate();
+  }
+  state.isAlive = false;
+  ws.ping();
+}, 30000);
+
+// Room-scoped broadcast: deliver to every OTHER client in the room.
+function broadcastToRoom(room, payload) {
+  for (const client of wss.clients) {
+    const cs = client.appState;
+    if (client !== ws && cs && cs.rooms.has(room) && client.readyState === 1) {
+      client.send(JSON.stringify(payload));
+    }
+  }
+}
+ws.appState = state; // expose state so peers can be matched by room
+
+ws.send(JSON.stringify({ type: 'ready', userId }));
+console.log(userId, 'authenticated and ready');
+
+// --- 4. Route messages ---
+ws.on('message', (raw) => {
+  let msg;
+  try { msg = JSON.parse(raw.toString()); }
+  catch { return ws.send(JSON.stringify({ type: 'error', message: 'bad JSON' })); }
+
+  if (msg.type === 'join') {
+    state.rooms.add(msg.room);
+    ws.send(JSON.stringify({ type: 'joined', room: msg.room }));
+    console.log(userId, 'joined', msg.room);
+  } else if (msg.type === 'leave') {
+    state.rooms.delete(msg.room);
+  } else if (msg.type === 'chat') {
+    if (!state.rooms.has(msg.room)) {
+      return ws.send(JSON.stringify({ type: 'error', message: 'join the room first' }));
+    }
+    broadcastToRoom(msg.room, { type: 'chat', room: msg.room, from: userId, text: msg.text });
+    console.log(userId, '-> ' + msg.room + ':', msg.text);
+  } else {
+    ws.send(JSON.stringify({ type: 'error', message: 'unknown type' }));
+  }
+});
+
+// --- 5. Cleanup: stop the heartbeat and drop the rooms ---
+ws.on('close', () => {
+  clearInterval(heartbeat);
+  state.rooms.clear();
+  console.log(userId, 'disconnected');
+});`;
+
+<NodeRunner node client:visible code={serverCode} />
+
+เพื่อทดสอบ rooms อย่างเหมาะสม ให้เชื่อม client สองตัวด้วย token ที่ต่างกัน (เช่น `?token=alice` และ `?token=bob`) ให้ทั้งคู่ `join` room เดียวกัน แล้วดู `chat` จากตัวหนึ่งปรากฏบนอีกตัว แต่ไม่เคยสะท้อนกลับไปยังผู้ส่ง ตัดการเชื่อมต่อตัวหนึ่งแล้ว `close` handler ของเซิร์ฟเวอร์จะเคลียร์ rooms ของมัน — ไม่มีสมาชิกภาพผีหลงเหลืออยู่
+
+## สิ่งที่คุณได้สร้างขึ้น
+
+ถอยกลับมาแล้วสังเกตว่าไฟล์เล็ก ๆ นี้คืออะไร: บริการ real-time ที่สมบูรณ์และป้องกันตัวได้ มันปฏิเสธ socket นิรนาม route ตาม room แทนที่จะกระหน่ำใส่ทุกคน อยู่รอดจาก client ที่หายวับไปโดยไม่มี `close` และพูด protocol ที่มี type ซึ่ง client ที่ reconnect สามารถต่อยอดได้ ทุกคุณสมบัติเหล่านั้นมาจากโมดูลแยกกันคนละโมดูล — และการประกอบมันเข้าด้วยกันก็คือทักษะที่คอร์สนี้ตั้งใจจะสอนเป๊ะ ๆ จากนี้ การสเกลมันข้าม instance คือ [pub/sub fan-out](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/) ที่คุณพบมาแล้ว ที่เหลือคือเรื่องของผลิตภัณฑ์
+
+<Callout title="บทสรุปปิดท้ายในหนึ่งบรรทัด">
+บริการ real-time ที่มีรูปร่างแบบ production คือ **auth ตอน connect**, **rooms** สำหรับ routing, **heartbeat** เพื่อตรวจจับลิงก์ที่ตายแล้ว และ **protocol ที่มี type และเป็นมิตรต่อ reconnect** — แต่ละอย่างคือโมดูลที่คุณทำมาแล้ว ต่อสายเข้าด้วยกันบนเซิร์ฟเวอร์ `ws` ตัวเดียว
+</Callout>
+
+export const quizApp = [
+  {
+    q: 'ทำไมเซิร์ฟเวอร์ถึงปฏิเสธ socket ที่ไม่ได้ authenticate ด้วย close code เฉพาะอย่าง 4401?',
+    options: [
+      'เพื่อบีบอัดการเชื่อมต่อ',
+      'เพื่อให้ client แยกแยะ auth ล้มเหลว (อย่า retry) ออกจากการหลุดชั่วคราว (ให้ retry) ได้',
+      'เพราะ ws ต้องการเหตุผลที่เป็นตัวเลข',
+      'เพื่อบังคับให้ client ใช้ SSE แทน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'heartbeat แก้ปัญหาอะไรในบริการนี้?',
+    options: [
+      'มันเข้ารหัสแต่ละ message',
+      'มันตรวจจับการเชื่อมต่อที่เงียบไปโดยไม่มี close event เพื่อให้เซิร์ฟเวอร์เรียกคืนมันได้',
+      'มันรับประกันลำดับของ message',
+      'มัน reconnect client ให้อัตโนมัติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'message แชตถูก route อย่างไรในเซิร์ฟเวอร์ของ demo?',
+    options: [
+      'broadcast ไปยังทุก client ที่เชื่อมต่ออยู่',
+      'ส่งเฉพาะให้ client อื่นที่เข้าร่วม room เดียวกัน',
+      'ส่งกลับเฉพาะให้ผู้ส่ง',
+      'เก็บในฐานข้อมูลและไม่เคยส่งต่อ',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="patterns-and-alternatives/building-a-realtime-app" questions={quizApp} />
+
+<ProgressTracker client:visible id="patterns-and-alternatives/building-a-realtime-app" />

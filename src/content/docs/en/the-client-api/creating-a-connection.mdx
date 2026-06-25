@@ -1,0 +1,151 @@
+---
+title: 'Creating a Connection'
+description: 'The WebSocket constructor in detail — ws vs wss, subprotocols, what happens the moment you call new WebSocket, and a live demo.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Everything starts with one line. The constructor is where a WebSocket is born, and a few decisions you make right here — which scheme, which subprotocol — shape the entire connection. Let us take that line apart.
+
+## The constructor signature
+
+```ts
+const ws = new WebSocket(url);
+// or, asking for a specific application protocol:
+const ws = new WebSocket(url, protocols);
+```
+
+The first argument, `url`, is required and must be an absolute URL using a WebSocket scheme. The second, `protocols`, is optional: a single string or an array of strings naming the **subprotocols** your client is willing to speak. That is the whole signature — one mandatory URL and one optional list.
+
+## ws vs wss
+
+A WebSocket URL never uses `http`. It uses one of two dedicated schemes:
+
+- **`ws://`** — an unencrypted connection. The bytes travel in the clear, exactly like plain `http://`.
+- **`wss://`** — the same protocol wrapped in TLS, exactly like `https://`. Encrypted, authenticated, and far harder to tamper with.
+
+The rule in practice is simple: **use `wss://` for anything that is not throwaway local testing.** Browsers enforce a mixed-content rule too — a page served over `https://` is not allowed to open a plain `ws://` connection, so on any real site `wss://` is effectively mandatory.
+
+```ts
+const dev  = new WebSocket('ws://localhost:8080');     // fine for local dev only
+const prod = new WebSocket('wss://chat.example.com');  // always this in production
+```
+
+## Subprotocols
+
+The optional second argument lets client and server agree on *which application-level protocol* they will speak over the socket — think of it as choosing a shared language before the conversation starts. The browser sends your list, the server picks **one**, and that choice comes back on `ws.protocol` once the connection opens.
+
+```ts
+const ws = new WebSocket('wss://example.com', ['chat.v2', 'chat.v1']);
+ws.onopen = () => {
+  console.log('server chose:', ws.protocol); // e.g. "chat.v2"
+};
+```
+
+You list them in order of preference; the server is expected to honor that order. If the server supports none of them it should reject the connection. Subprotocols are optional — many apps never use them — but they are the clean way to version your wire format.
+
+## What happens the moment you construct it
+
+Calling `new WebSocket(url)` does **not** block. It returns immediately with the object in the `CONNECTING` state, while the handshake runs in the background. The diagram traces those first moments:
+
+<Mermaid title="From construction to open" code={constructDiagram} />
+
+export const constructDiagram = `sequenceDiagram
+  participant App as Your code
+  participant WS as WebSocket object
+  participant Srv as Server
+  App->>WS: new WebSocket(url, protocols)
+  Note over WS: readyState = CONNECTING (returns immediately)
+  WS->>Srv: HTTP Upgrade request (+ chosen protocols)
+  Srv-->>WS: 101 Switching Protocols (picks one protocol)
+  Note over WS: readyState = OPEN
+  WS-->>App: onopen fires
+  App->>WS: now safe to ws.send(...)`;
+
+Because construction returns instantly, the object is not yet ready to send anything — `readyState` is still `CONNECTING`. You attach your handlers right after constructing, then wait for `onopen`. Trying to `send()` before that throws. We will lean on this in the next lessons.
+
+## A live connection
+
+The demo uses an in-page echo socket with the real `WebSocket` API, so it runs anywhere with no server. It mimics the constructor's two-argument form and reports the negotiated `protocol`. In a real app you would write `new WebSocket('wss://your-server', ['chat.v2'])` and nothing else would change.
+
+export const createEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server', ['chat.v2']).
+  class EchoSocket {
+    constructor(url, protocols) {
+      this.url = url;
+      this.readyState = 0; // CONNECTING
+      const list = Array.isArray(protocols) ? protocols : (protocols ? [protocols] : []);
+      this.protocol = list[0] || ''; // pretend the server picked our first choice
+      setTimeout(() => {
+        this.readyState = 1; // OPEN
+        if (this.onopen) this.onopen({});
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket('wss://example.com/socket', ['chat.v2', 'chat.v1']);
+  console.log('right after construct, readyState:', ws.readyState, '(0 = CONNECTING)');
+  ws.onopen = () => {
+    console.log('open — server agreed on protocol:', ws.protocol);
+    ws.send('handshake complete');
+  };
+  ws.onmessage = (event) => {
+    console.log('received:', event.data);
+    ws.close();
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={createEchoCode} />
+
+The first log proves construction returned with `readyState` still `0`. Only later, inside `onopen`, is the connection usable — and the negotiated subprotocol is available there as `ws.protocol`.
+
+<Callout title="Constructor checklist">
+Prefer `wss://` everywhere but local testing; pass subprotocols as a preference-ordered array and read the winner from `ws.protocol`; and remember the constructor returns instantly in `CONNECTING` — wait for `onopen` before you send.
+</Callout>
+
+export const quizCreate = [
+  {
+    q: 'Which URL scheme should a production WebSocket use?',
+    options: [
+      'http://',
+      'ws:// for speed',
+      'wss:// — the TLS-encrypted scheme',
+      'https://',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What is the purpose of the optional second constructor argument?',
+    options: [
+      'It sets a connection timeout',
+      'It lists subprotocols so client and server can agree on one application protocol',
+      'It chooses the TCP port',
+      'It enables binary mode',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What state is the object in immediately after new WebSocket(url) returns?',
+    options: [
+      'OPEN — it is ready to send',
+      'CONNECTING — the handshake runs in the background',
+      'CLOSED until you call connect()',
+      'It blocks until connected',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="the-client-api/creating-a-connection" questions={quizCreate} />
+
+<ProgressTracker client:visible id="the-client-api/creating-a-connection" />

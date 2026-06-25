@@ -1,0 +1,161 @@
+---
+title: 'RPC over WebSocket'
+description: 'Request/response over a one-way message pipe: correlation ids, promises that resolve on the matching reply, and timeouts — with a runnable client demo.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Pub/sub is about *broadcasting interest*. But sometimes a client wants the opposite: a precise answer to one specific question — "what is the history of this room?", "is this username taken?". Over HTTP that is just a request and its response. Over a WebSocket there is no such thing built in: you `send` a message and, separately, `onmessage` fires for *every* incoming message. Nothing ties a reply back to the question that triggered it. **RPC over WebSocket** is the small pattern that rebuilds request/response on top of a one-way message stream.
+
+## The problem: messages have no replies
+
+A WebSocket is a stream of independent frames in each direction. When you call `ws.send` and later a message arrives, you have no language-level way to know *that* message answers *this* send. If you fire three requests and three replies come back — possibly out of order — they all land in the same `onmessage` handler as an undistinguished pile. You need to stitch each reply to its request yourself.
+
+## The fix: correlation ids
+
+The trick is to tag every request with a unique **correlation id**, and require the server to echo that same id on the reply. The client keeps a table of *pending* requests keyed by id. When a message arrives, you look up its id, find the waiting promise, and resolve it. The flow looks like this:
+
+<Mermaid title="A correlation id ties each reply back to its request" code={rpcSeq} />
+
+export const rpcSeq = `sequenceDiagram
+  participant App as App code
+  participant RPC as RPC client
+  participant WS as WebSocket
+  participant Srv as Server
+  App->>RPC: call('getUser', {id: 7})
+  RPC->>RPC: id = 'r1'; store pending['r1'] = resolve
+  RPC->>WS: send {id:'r1', method:'getUser', params:{id:7}}
+  WS->>Srv: {id:'r1', ...}
+  Srv-->>WS: {id:'r1', result:{name:'Sam'}}
+  WS-->>RPC: onmessage {id:'r1', result:...}
+  RPC->>RPC: lookup pending['r1'] -> resolve(result)
+  RPC-->>App: promise resolves with {name:'Sam'}`;
+
+Because each request carries its own id, replies can arrive in any order — the id, not the arrival sequence, decides which promise resolves. That is what makes a single connection safe to multiplex across many concurrent calls.
+
+## Three pieces you always need
+
+A usable RPC client over WebSocket is essentially three things:
+
+- **A pending map.** `Map<id, { resolve, reject, timer }>` — one entry per in-flight call, removed when the reply lands or the call times out.
+- **An id generator.** Any source of unique strings — a counter, a `crypto.randomUUID()`. It only has to be unique among *currently pending* calls.
+- **A timeout.** The fatal flaw of naive RPC is the reply that never comes (server crash, dropped message). Without a timeout the promise hangs forever and the pending map leaks. Every call gets a timer that rejects and cleans up if no reply arrives in time.
+
+## See it live
+
+The demo wires a real-`WebSocket`-style mock to a complete RPC client. We make two successful calls (`add` and `echo`) whose replies arrive **out of order**, and one call to a method the server ignores — to prove the timeout fires and rejects rather than hanging. Run it and watch the ids match replies to calls regardless of order, and the missing reply reject on schedule.
+
+export const rpcDemoCode = `(function () {
+  // Mock socket with the real WebSocket API. Its 'server' replies after a delay,
+  // and deliberately answers out of order. In a real app this is:
+  //   const ws = new WebSocket('wss://your-server')
+  class MockSocket {
+    constructor() { this.readyState = 1; }
+    send(raw) {
+      const msg = JSON.parse(raw);
+      // Simulate a server that handles add/echo and ignores 'noReply'.
+      if (msg.method === 'add') {
+        const delay = 80; // arrives second despite being sent first
+        setTimeout(() => this._reply({ id: msg.id, result: msg.params.a + msg.params.b }), delay);
+      } else if (msg.method === 'echo') {
+        const delay = 20; // arrives first
+        setTimeout(() => this._reply({ id: msg.id, result: msg.params.text }), delay);
+      }
+      // 'noReply' is silently dropped -> the client's timeout must fire.
+    }
+    _reply(obj) { if (this.onmessage) this.onmessage({ data: JSON.stringify(obj) }); }
+  }
+
+  // The reusable RPC client: send a request, get a promise back.
+  class RpcClient {
+    constructor(ws, timeoutMs) {
+      this.ws = ws;
+      this.timeoutMs = timeoutMs || 1000;
+      this.pending = new Map();
+      this.seq = 0;
+      ws.onmessage = (event) => this._onMessage(event.data);
+    }
+    call(method, params) {
+      const id = 'r' + (++this.seq);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error('timeout: no reply for ' + method + ' (' + id + ')'));
+        }, this.timeoutMs);
+        this.pending.set(id, { resolve, reject, timer });
+        this.ws.send(JSON.stringify({ id: id, method: method, params: params }));
+        console.log('-> sent', method, 'as', id);
+      });
+    }
+    _onMessage(raw) {
+      const msg = JSON.parse(raw);
+      const entry = this.pending.get(msg.id);
+      if (!entry) return; // unknown id (late/duplicate) — ignore
+      clearTimeout(entry.timer);
+      this.pending.delete(msg.id);
+      if ('error' in msg) entry.reject(new Error(msg.error));
+      else entry.resolve(msg.result);
+    }
+  }
+
+  const rpc = new RpcClient(new MockSocket(), 300);
+
+  rpc.call('add', { a: 2, b: 3 }).then((r) => console.log('<- add resolved:', r));
+  rpc.call('echo', { text: 'hello' }).then((r) => console.log('<- echo resolved:', r));
+  rpc.call('noReply', {}).catch((e) => console.log('<- noReply rejected:', e.message));
+})();`;
+
+<NodeRunner client:visible code={rpcDemoCode} />
+
+Notice the order in the log: `add` and `echo` are *sent* first and second, but `echo` *resolves* first because its reply was faster — and that is fine, because each promise is keyed by id, not by order. Meanwhile `noReply` never gets an answer, so after the timeout its promise rejects with a clear error and its pending entry is removed. That cleanup is the difference between a robust client and a slow memory leak.
+
+## Designing the wire format
+
+Keep the envelope minimal and symmetric. A request carries `id`, `method`, and `params`; a reply carries the same `id` and either `result` or `error`. If you want a standard instead of inventing your own, [JSON-RPC 2.0](https://www.jsonrpc.org/specification) defines exactly this shape — id, method, params, result/error — and is a sensible default to copy. Either way the rule is fixed: **the reply must echo the request's id**, or the client cannot route it.
+
+<Callout title="Rebuild request/response yourself">
+A WebSocket has no built-in concept of a reply. Tag each request with a **correlation id**, store a **pending promise** keyed by that id, and resolve it when a message carrying the same id arrives. Always attach a **timeout** so a missing reply rejects and cleans up instead of hanging forever.
+</Callout>
+
+export const quizRpc = [
+  {
+    q: 'Why does RPC over a WebSocket need a correlation id on every request?',
+    options: [
+      'To encrypt the request payload',
+      'So the client can match each incoming reply to the request that triggered it',
+      'Because WebSockets require numeric message ids',
+      'To compress repeated method names',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In the demo, why can echo resolve before add even though add was sent first?',
+    options: [
+      'The client sorts replies alphabetically',
+      'Each pending promise is keyed by id, so reply order does not matter',
+      'add was never actually sent',
+      'The WebSocket guarantees last-in-first-out delivery',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the role of the timeout in the RPC client?',
+    options: [
+      'It limits how fast requests can be sent',
+      'It rejects and cleans up a call whose reply never arrives, preventing a hung promise and a leaking pending map',
+      'It retries the request automatically',
+      'It closes the WebSocket after each call',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="patterns-and-alternatives/rpc-over-ws" questions={quizRpc} />
+
+<ProgressTracker client:visible id="patterns-and-alternatives/rpc-over-ws" />

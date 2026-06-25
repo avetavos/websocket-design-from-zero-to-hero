@@ -1,0 +1,96 @@
+---
+title: 'Patterns & Alternatives'
+description: 'ชุดของ message pattern ไม่กี่แบบที่แอป real-time ส่วนใหญ่นำกลับมาใช้ซ้ำ วิธีเลือก transport ให้เหมาะกับงาน และภาพรวมของสิ่งที่โมดูลนี้ครอบคลุม'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ถึงตรงนี้คุณเปิด socket ได้ ออกแบบ message ได้ รักษาการเชื่อมต่อให้อยู่ได้ และ broadcast จากเซิร์ฟเวอร์ได้แล้ว โมดูลสุดท้ายนี้จะถอยออกมาจาก *กลไก* ไปสู่ *รูปร่าง* ของระบบ เมื่อคุณได้เห็นระบบ real-time ถูกสร้างขึ้นมาสักสองสามระบบ คุณจะสังเกตเห็น pattern ชุดเดิม ๆ ไม่กี่แบบโผล่มาครั้งแล้วครั้งเล่า — และจะสังเกตเห็นว่าบางครั้ง WebSocket ก็ไม่ใช่เครื่องมือที่ถูกต้องเสียด้วยซ้ำ บทเรียนนี้จะวางแผนที่ของดินแดนนั้นไว้ก่อนที่บทที่เหลือของโมดูลจะเติมรายละเอียดลงไป
+
+## Pattern ที่คุณมักประดิษฐ์ซ้ำอยู่เรื่อย ๆ
+
+การเชื่อมต่อแบบถาวรและสองทางคือผืนผ้าใบเปล่า อิสระแบบนั้นแหละที่ทำให้ทีมงานบังเอิญสร้างโครงสร้างเดิม ๆ ขึ้นมาใหม่ซ้ำ ๆ มีสามแบบที่ครอบคลุมฟีเจอร์ real-time ส่วนใหญ่อย่างท่วมท้น:
+
+- **Publish / subscribe.** client ประกาศความสนใจใน topic บางอย่าง — ห้องแชต สัญลักษณ์หุ้น หรือ id ของเอกสาร — แล้วเซิร์ฟเวอร์ส่งเฉพาะ event ที่ตรงกันให้เท่านั้น ไม่มีใครได้รับสายน้ำของทุกอย่างทั้งหมด แต่ละ client ได้รับเฉพาะส่วนที่ปรับมาให้ตัวเอง นี่คือกระดูกสันหลังของแอปแบบหลายผู้ใช้แทบทุกตัว
+- **Request / response (RPC).** บางครั้ง client ต้องการ *คำตอบของคำถามเฉพาะข้อนี้* จริง ๆ เมื่อส่งผ่านท่อข้อความทางเดียว มันไม่มี "ตอบกลับอันนี้" มาให้ในตัว คุณจึงต้องสร้างมันเอง: ติด id ให้กับ request แล้ว resolve promise เมื่อ reply ที่มี id เดียวกันมาถึง
+- **Fire-and-forget events.** client ปล่อยบางอย่างออกไป — "cursor ขยับไปที่ (x, y)", "ผู้ใช้กำลังพิมพ์" — และไม่คาดหวัง reply ใด ๆ เลย เป็น pattern ที่ถูกที่สุด และเป็นแบบที่ WebSocket ถูกออกแบบมาเพื่อสิ่งนี้แทบจะโดยตรง
+
+protocol ใน production ส่วนใหญ่ก็แค่สามอย่างนี้นำมาประกอบกันบนการเชื่อมต่อเดียว: subscribe เข้าห้อง, RPC เพื่อดึงประวัติของห้อง แล้ว fire-and-forget ทุกการกดแป้นพิมพ์
+
+## วิธีเลือก transport
+
+ก่อนจะคว้า WebSocket มาใช้โดยอัตโนมัติ มันคุ้มค่าที่จะถามว่าข้อมูล *ต้องการ* อะไรจริง ๆ คำตอบตามตรงมักจะเป็น "น้อยกว่า full duplex socket" วิธีตัดสินใจอย่างรวดเร็ว:
+
+<Mermaid title="เลือก transport สำหรับ real-time ตามสิ่งที่ข้อมูลต้องการ" code={chooseDiagram} />
+
+export const chooseDiagram = `flowchart TD
+  start["Does the client need to send<br/>messages mid-stream too?"]
+  start -- "No, only receive" --> sse["Server-Sent Events<br/>(simple, auto-reconnect, HTTP)"]
+  start -- "Yes, both directions" --> freq["High-frequency or<br/>unordered media/datagrams?"]
+  freq -- "No, ordinary messages" --> ws["WebSocket<br/>(bidirectional, ordered)"]
+  freq -- "Yes" --> wt["WebTransport<br/>(HTTP/3, streams + datagrams)"]
+  sse -. "no SSE / proxy strips it" .-> poll["Long-polling fallback"]
+  ws -. "blocked by proxy" .-> poll`;
+
+ประเด็นไม่ได้อยู่ที่ว่า WebSocket ไม่ดี — มันเป็นตัวเลือกตั้งต้นสำหรับ traffic ที่เป็นสองทางจริง ๆ ประเด็นคือ "real-time" ไม่ใช่ความต้องการแบบเดียว ticker ราคาแบบสดไหลจากเซิร์ฟเวอร์ไปยัง client เท่านั้น ดังนั้น Server-Sent Events จึงเรียบง่ายกว่าและ reconnect ตัวเองได้ เกมแบบ multiplayer ทนต่อแพ็กเก็ตที่หลุดและสลับลำดับได้ ดังนั้น WebTransport datagram จึงเหมาะกว่า จับคู่ transport ให้เข้ากับ traffic แล้วคุณจะแบกความซับซ้อนน้อยลง
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+โมดูลนี้ — **Patterns & Alternatives** — แปลงรูปร่างเหล่านั้นให้เป็นสิ่งที่คุณสร้างได้และเลือกได้:
+
+1. **Patterns & Alternatives (คุณอยู่ที่นี่)** — pattern ที่พบบ่อยและวิธีเลือก transport
+2. **Pub/sub and rooms** — subscribe เข้า topic รับเฉพาะสิ่งที่คุณขอ พร้อม demo ที่รันได้ในหน้านี้
+3. **RPC over WebSocket** — correlation id และ promise ที่ resolve เมื่อ reply ที่ตรงกันมาถึง พร้อม timeout
+4. **WebSocket vs SSE vs WebTransport** — เลือกระหว่าง socket สองทาง, stream ทางเดียว, fallback และ transport HTTP/3 แบบใหม่
+5. **Building a real-time app** — ผูก rooms, heartbeat, auth และ reconnect เข้าด้วยกันเป็นบริการเล็ก ๆ หนึ่งตัวบนเซิร์ฟเวอร์ `ws` จริง
+
+## สิ่งนี้เข้ากับภาพรวมตรงไหน
+
+ทุกอย่างก่อนหน้านี้เป็นชิ้นส่วนประกอบ ส่วนโมดูลนี้คือคู่มือการประกอบ ถ้าแนวคิดตรงนี้รู้สึกบางไป รากฐานอยู่ห่างออกไปแค่คลิกเดียว: [client API](/websocket-design-from-zero-to-hero/th/the-client-api/), [message design](/websocket-design-from-zero-to-hero/th/message-design/), [connection lifecycle](/websocket-design-from-zero-to-hero/th/connection-lifecycle/), [server design](/websocket-design-from-zero-to-hero/th/server-design/) และ [scaling with pub/sub](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/) ทั้งหมดป้อนเข้าสู่สิ่งที่เราจะสร้างต่อไปโดยตรง
+
+<Callout title="การเปลี่ยนมุมมองทางความคิด">
+หยุดถามว่า "ฉันจะใช้ WebSocket อย่างไร?" แล้วเริ่มถามว่า "traffic ของฉันมีรูปร่างแบบไหน?" ฟีเจอร์ส่วนใหญ่คือ **pub/sub**, **RPC** หรือ **fire-and-forget** — และบางส่วนก็ไม่ต้องใช้ WebSocket เลยด้วยซ้ำ การเลือก pattern และ transport ที่ถูกต้องตั้งแต่ต้นคือส่วนใหญ่ของงานออกแบบ
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'pattern สามแบบใดที่ครอบคลุมฟีเจอร์ real-time ส่วนใหญ่ที่สร้างบนการเชื่อมต่อเดียว?',
+    options: [
+      'GET, POST และ DELETE',
+      'Publish/subscribe, request/response (RPC) และ fire-and-forget events',
+      'Polling, caching และ pagination',
+      'TLS, compression และ authentication',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เมื่อ client ต้องการเพียงรับ stream ทางเดียวและไม่เคยส่งระหว่างการเชื่อมต่อ transport แบบใดเหมาะกว่าและเรียบง่ายกว่า?',
+    options: [
+      'WebSocket แบบเต็ม',
+      'Server-Sent Events',
+      'WebTransport datagram',
+      'TCP socket แบบดิบ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'แนวคิดหลักเบื้องหลัง pattern แบบ publish/subscribe คืออะไร?',
+    options: [
+      'ทุก client ได้รับทุก event ที่เซิร์ฟเวอร์ปล่อยออกมา',
+      'client ประกาศความสนใจใน topic และได้รับเฉพาะ event ที่ตรงกัน',
+      'เซิร์ฟเวอร์ poll แต่ละ client เพื่อขออัปเดต',
+      'client แลกเปลี่ยน message กันโดยตรงโดยไม่มีเซิร์ฟเวอร์',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="patterns-and-alternatives/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="patterns-and-alternatives/index" />

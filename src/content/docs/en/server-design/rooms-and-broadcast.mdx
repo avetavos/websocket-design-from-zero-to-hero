@@ -1,0 +1,177 @@
+---
+title: 'Rooms and Broadcast'
+description: 'Grouping clients into rooms and channels, broadcasting to a single room versus everyone with wss.clients, plus a live Node fan-out demo.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The broadcast — one event reaching many clients at once — is the reason WebSocket servers exist. This lesson covers the two flavours of broadcast (to *everyone* and to a *room*) and the data structures that make rooms work.
+
+## Broadcasting to everyone
+
+The `ws` library gives you `wss.clients`, a `Set` of every currently open socket. To send something to all of them, iterate and send — checking that each socket is actually open first:
+
+```ts
+import { WebSocket } from 'ws';
+
+function broadcastAll(wss, message) {
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  }
+}
+```
+
+The `readyState === WebSocket.OPEN` guard matters: a socket can be mid-close or already closing, and calling `send` on it throws or silently buffers. Always filter to OPEN before sending. This is the simplest possible broadcast — useful for a global announcement, but a sledgehammer for anything targeted.
+
+## Rooms: broadcasting to a subset
+
+Most apps do not want *everyone* to hear *everything*. A chat message belongs to one channel; a game update belongs to one match. The pattern is a **room** — a named group of sockets. The classic data structure is a `Map` from room name to a `Set` of sockets:
+
+```ts
+const rooms = new Map(); // roomName -> Set<ws>
+
+function join(room, ws) {
+  if (!rooms.has(room)) rooms.set(room, new Set());
+  rooms.get(room).add(ws);
+}
+
+function leave(room, ws) {
+  rooms.get(room)?.delete(ws);
+  if (rooms.get(room)?.size === 0) rooms.delete(room); // tidy up empty rooms
+}
+
+function broadcastRoom(room, message) {
+  for (const client of rooms.get(room) ?? []) {
+    if (client.readyState === WebSocket.OPEN) client.send(message);
+  }
+}
+```
+
+Now a message fans out only to the sockets that joined that room — not the whole server. Notice the symmetry with the previous lesson: each socket's `state.subscriptions` set is the *client's* view of its rooms, while this `rooms` map is the *server's* reverse index. Keep the two in sync.
+
+<Mermaid title="Fan-out: a message to one room reaches only that room's members" code={fanoutDiagram} />
+
+export const fanoutDiagram = `flowchart TB
+  SENDER["client A<br/>(in room 'sports')"] -- "publish to 'sports'" --> S["server"]
+  S --> ROOM["room 'sports'"]
+  ROOM == "deliver" ==> B["client B ✓ in sports"]
+  ROOM == "deliver" ==> C["client C ✓ in sports"]
+  S -. "not delivered" .-> D["client D ✗ in 'news'"]`;
+
+Client D, which joined a different room, never hears the message — that selectivity is the entire point of rooms.
+
+## Don't echo to the sender (usually)
+
+A common refinement: when broadcasting a chat line, you often skip the sender, because their own client already showed the message optimistically. Just compare against the sending socket:
+
+```ts
+for (const client of rooms.get(room) ?? []) {
+  if (client !== sender && client.readyState === WebSocket.OPEN) {
+    client.send(message);
+  }
+}
+```
+
+Whether to include the sender is an application choice — some apps echo back so the sender's UI confirms the server received it. Either way, the `client !== sender` toggle is how you control it.
+
+## A live broadcast server
+
+The demo below implements rooms on a real `ws` server. A client sends `{"type":"join","room":"x"}` to join, then `{"type":"say","text":"hi"}` to broadcast to everyone in its room. Cleanup on close removes the socket from its room so you never broadcast to a ghost. Open it in StackBlitz and connect a couple of clients to the same room.
+
+export const broadcastCode = `// Real ws broadcast server. ws/wss/req in scope.
+// A module-level Map survives across connections (declared once on the server).
+wss.rooms = wss.rooms || new Map(); // roomName -> Set<ws>
+const rooms = wss.rooms;
+
+ws.room = null;
+
+function joinRoom(name) {
+  leaveRoom();
+  if (!rooms.has(name)) rooms.set(name, new Set());
+  rooms.get(name).add(ws);
+  ws.room = name;
+}
+function leaveRoom() {
+  if (ws.room && rooms.has(ws.room)) {
+    rooms.get(ws.room).delete(ws);
+    if (rooms.get(ws.room).size === 0) rooms.delete(ws.room);
+  }
+  ws.room = null;
+}
+function broadcastRoom(name, payload, except) {
+  for (const client of rooms.get(name) || []) {
+    if (client !== except && client.readyState === client.OPEN) {
+      client.send(JSON.stringify(payload));
+    }
+  }
+}
+
+ws.send(JSON.stringify({ type: 'hello', hint: 'join then say' }));
+
+ws.on('message', (data) => {
+  const msg = JSON.parse(data.toString());
+  if (msg.type === 'join') {
+    joinRoom(msg.room);
+    const size = rooms.get(msg.room).size;
+    ws.send(JSON.stringify({ type: 'joined', room: msg.room, members: size }));
+  } else if (msg.type === 'say' && ws.room) {
+    broadcastRoom(ws.room, { type: 'message', room: ws.room, text: msg.text }, ws);
+  }
+});
+
+// Remove from the room on disconnect so broadcasts never hit a ghost.
+ws.on('close', leaveRoom);
+ws.on('error', leaveRoom);`;
+
+<NodeRunner node client:visible code={broadcastCode} />
+
+With two clients joined to the same room, a `say` from one arrives at the other but not back at the sender (we passed `ws` as the `except` argument). A third client in a different room hears nothing. That targeted fan-out — backed by a `Map` of `Set`s and disciplined cleanup — is the core engine of every chat, presence, and live-collaboration feature you will build.
+
+<Callout title="Everyone vs a room">
+`wss.clients` is the set of all sockets — iterate it (guarding on `readyState === OPEN`) to broadcast to everyone. For targeted delivery, keep a `Map<room, Set<ws>>`, fan out only to that room's members, optionally skipping the sender, and remove sockets from their room on close.
+</Callout>
+
+export const quizRooms = [
+  {
+    q: 'What is `wss.clients` in the ws library?',
+    options: [
+      'A list of room names',
+      'A Set of every currently connected socket',
+      'The number of messages sent',
+      'A queue of pending upgrades',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why check `client.readyState === WebSocket.OPEN` before calling `send` during a broadcast?',
+    options: [
+      'To make the message arrive faster',
+      'Because a socket may be closing, and sending to a non-open socket can throw or buffer wastefully',
+      'Because send only works on the first client',
+      'To encrypt the payload',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What data structure cleanly models rooms for targeted broadcast?',
+    options: [
+      'A single array of all messages',
+      'A Map from room name to a Set of sockets',
+      'A string of comma-separated user ids',
+      'A counter of connected clients',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-design/rooms-and-broadcast" questions={quizRooms} />
+
+<ProgressTracker client:visible id="server-design/rooms-and-broadcast" />

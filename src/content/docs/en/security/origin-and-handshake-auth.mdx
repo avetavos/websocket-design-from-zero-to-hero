@@ -1,0 +1,154 @@
+---
+title: 'Origin and Handshake Auth'
+description: 'WebSockets are not CORS-protected — validate the Origin header server-side and authenticate during the handshake without leaking your token.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The first place a WebSocket can betray you is the **handshake** — the one HTTP request that upgrades a plain connection into a socket. Two questions must be answered there, and if you skip either one, nothing later can save you: *which page is opening this connection?* and *who is the user behind it?*
+
+## WebSockets are not CORS-protected
+
+Here is the trap that catches almost everyone. When a page calls `fetch('https://your-api/...')` across origins, the browser runs the CORS machinery: it may send a preflight, and it will hide the response unless your server opts in with the right headers. That protection is automatic.
+
+A WebSocket upgrade gets **none of it**. When any page — including `https://evil.example` — runs this:
+
+```ts
+const ws = new WebSocket('wss://your-server/socket');
+```
+
+the browser does **not** send a CORS preflight, does **not** consult the same-origin policy, and **does** attach the user's cookies for `your-server` if they exist. The upgrade request leaves the browser and arrives at your server looking exactly like a legitimate one. If the user is logged in, the attacker's page now has an authenticated socket. This is **Cross-Site WebSocket Hijacking** — CSRF's cousin.
+
+The one thing the browser *does* give you is an `Origin` header on the handshake, set to the page that opened the socket and which scripts cannot forge. Reading and checking that header is the defence, and it is entirely on your side of the wire.
+
+```http
+GET /socket HTTP/1.1
+Host: your-server
+Upgrade: websocket
+Connection: Upgrade
+Origin: https://app.example.com
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Cookie: session=…
+```
+
+Maintain an allowlist of origins you trust and reject anything else **before** completing the upgrade.
+
+## Authenticate during the handshake
+
+Origin tells you *which page*. You still need *which user*. Authenticate the connection while it is still an HTTP request — that is the moment you have headers, cookies, and the freedom to refuse cleanly. There are three common ways to carry the credential:
+
+- **A session cookie.** If the user is already logged in on `https://app.example.com`, the handshake carries their cookie automatically. Validate it server-side. This is convenient but is *precisely* what makes Cross-Site WebSocket Hijacking possible — which is why the `Origin` check is mandatory when you authenticate by cookie.
+- **A token in a subprotocol.** Pass a bearer token via the `Sec-WebSocket-Protocol` header (the second argument to `new WebSocket(url, protocols)`). It travels in a header, not a logged location, and the server can read it during the upgrade.
+- **A token in the first message.** Open the socket, then make the client's very first frame an `auth` message. The server keeps the connection unauthenticated and silent until that frame validates.
+
+And one anti-pattern to avoid above all:
+
+<Callout title="Never put the token in the URL">
+Do **not** do `new WebSocket('wss://server/socket?token=eyJ...')`. Query strings are written to **access logs**, proxy logs, and browser history, and may leak via the `Referer` header — so your bearer token ends up sitting in plaintext in a dozen places you do not control. Carry the credential in a cookie, a subprotocol header, or the first message instead.
+</Callout>
+
+## The authenticated handshake, step by step
+
+<Mermaid title="Origin check and token validation during the WebSocket handshake" code={handshakeDiagram} />
+
+export const handshakeDiagram = `sequenceDiagram
+  participant C as Browser (page)
+  participant S as WebSocket server
+  C->>S: GET /socket  Upgrade: websocket<br/>Origin: app.example.com<br/>Sec-WebSocket-Protocol: bearer, &lt;token&gt;
+  S->>S: 1. Origin in allowlist?
+  alt Origin not allowed
+    S-->>C: reject upgrade / close 1008
+  else Origin OK
+    S->>S: 2. Validate token / cookie
+    alt Token invalid or expired
+      S-->>C: close 1008 (policy violation)
+    else Authenticated
+      S-->>C: 101 Switching Protocols
+      Note over C,S: Connection open — identity now fixed
+    end
+  end`;
+
+Notice both checks happen *before* `101 Switching Protocols`. A rejected origin or a bad token never becomes an open socket — and when we do close, we use code **1008 (policy violation)**, the standard signal that the connection was refused for a rule, not a network fault.
+
+## A runnable server that rejects bad origins and tokens
+
+The demo below is the **body of the `connection` handler** for a real `ws` server. The `ws` library hands you `req` — the original upgrade request — so its headers are still available. We check `req.headers.origin` against an allowlist, then pull a token from the `Sec-WebSocket-Protocol` header and validate it. Anything that fails gets `ws.close(1008, …)`. Open it in StackBlitz and run `npm run client` to watch a connection get accepted or refused.
+
+export const handshakeServerCode = `// Body of wss.on('connection', (ws, req) => { ... }). ws/wss/req in scope.
+const ALLOWED_ORIGINS = ['https://app.example.com', 'http://localhost:8080'];
+const VALID_TOKENS = { 'tok-alice': 'alice', 'tok-bob': 'bob' };
+
+// 1. Origin check — the browser cannot forge this header.
+const origin = req.headers.origin;
+if (!origin || !ALLOWED_ORIGINS.includes(origin)) {
+  console.log('rejecting connection: bad origin', origin);
+  ws.close(1008, 'origin not allowed');
+  return;
+}
+
+// 2. Token check — read it from the subprotocol header, NOT the URL.
+//    Header looks like: "bearer, tok-alice"
+const protoHeader = req.headers['sec-websocket-protocol'] || '';
+const token = String(protoHeader).split(',').map((s) => s.trim())[1];
+const user = VALID_TOKENS[token];
+if (!user) {
+  console.log('rejecting connection: bad token', token);
+  ws.close(1008, 'invalid token');
+  return;
+}
+
+// Authenticated. Pin the identity to this socket for later authorization.
+ws.user = user;
+console.log(\`authenticated \${user} from \${origin}\`);
+ws.send(\`welcome \${user} — your connection is authenticated\`);`;
+
+<NodeRunner node client:visible code={handshakeServerCode} />
+
+The starter's client opens with a localhost origin but no token, so you will see the server reject it with **close 1008** and `invalid token` — exactly the refusal an attacker's page would hit. Edit `VALID_TOKENS`, or have the client pass a subprotocol, to see the accepted path. The key idea: by the time the socket is open, both *which page* and *which user* are already settled, and the answer to "who is this?" is now stored on the connection itself.
+
+<Callout title="Guard the door, then trust the room">
+The handshake is the only moment you cheaply have HTTP headers, cookies, and a clean way to refuse. Check the `Origin` against an allowlist, validate the credential (cookie, subprotocol token, or first-message token — never the URL), and close bad attempts with **1008**. Everything after this depends on getting these two checks right.
+</Callout>
+
+export const quizOrigin = [
+  {
+    q: 'Why is the Origin header check on the server mandatory for cookie-authenticated WebSockets?',
+    options: [
+      'Because the Origin header improves performance',
+      'Because the browser does no CORS preflight for WebSocket upgrades, so without it any site can open an authenticated socket using the user’s cookies',
+      'Because cookies are not sent on WebSocket upgrades',
+      'Because TLS requires it',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where should an authentication token NOT be placed?',
+    options: [
+      'In a session cookie',
+      'In the Sec-WebSocket-Protocol subprotocol header',
+      'In the connection URL’s query string',
+      'In the first message after the socket opens',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which close code does the demo use to refuse a connection with a bad origin or token?',
+    options: [
+      '1000 (normal closure)',
+      '1006 (abnormal closure)',
+      '1008 (policy violation)',
+      '1011 (internal error)',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="security/origin-and-handshake-auth" questions={quizOrigin} />
+
+<ProgressTracker client:visible id="security/origin-and-handshake-auth" />

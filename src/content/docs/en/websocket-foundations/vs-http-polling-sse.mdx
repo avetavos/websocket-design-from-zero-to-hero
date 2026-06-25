@@ -1,0 +1,117 @@
+---
+title: 'WebSockets vs HTTP, Polling, and SSE'
+description: 'How WebSockets compare to request/response, short polling, long polling, and Server-Sent Events — latency, overhead, and when each fits.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+WebSockets are not the only way to move data between a browser and a server, and they are not always the right one. To choose well you need to know the alternatives. This lesson walks through four other approaches and lines them up against WebSockets on the two axes that matter most: **latency** (how soon the client learns about a server-side event) and **overhead** (how much wasted work happens per useful message).
+
+## Plain HTTP request/response
+
+The baseline. The client asks; the server answers; the exchange ends. The server can *never* speak first. For fetching pages and submitting forms this is perfect. For learning about events that happen on the server, it offers nothing — the client would have to ask again, which leads us to polling.
+
+## Short polling
+
+The client asks "anything new?" on a fixed timer — say every few seconds — and the server replies immediately, usually with "no" most of the time.
+
+<Mermaid title="Short polling: repeated requests, mostly empty answers" code={pollDiagram} />
+
+export const pollDiagram = `sequenceDiagram
+  participant C as Client
+  participant S as Server
+  loop every few seconds
+    C->>S: GET /updates
+    S-->>C: 200 (nothing new)
+  end
+  Note over S: event happens here
+  C->>S: GET /updates
+  S-->>C: 200 (here is the update)`;
+
+**Latency** is bounded by your interval — an event can sit unseen for up to one polling period. **Overhead** is high: most requests carry full HTTP headers and return nothing useful. Tighten the interval and you cut latency but multiply the wasted requests. It is simple and works everywhere, which is its only real virtue.
+
+## Long polling
+
+A smarter variant. The client sends a request, and the server **holds it open** until either an event occurs or a timeout is reached, then responds. The client immediately sends another request and waits again.
+
+This pushes latency down close to real-time — the response comes as soon as the event does — without a busy timer. But each delivered message still costs a full request/response cycle and a reconnect, so under heavy event rates the overhead climbs and it can strain server connection limits.
+
+## Server-Sent Events (SSE)
+
+SSE opens **one** long-lived HTTP connection over which the server streams events to the client as they happen. It is efficient, auto-reconnects, and rides on ordinary HTTP. But it is deliberately **one-way: server → client only**. The client cannot send data back over the same channel; to talk to the server it makes separate normal HTTP requests.
+
+## WebSockets
+
+A WebSocket also keeps one connection open, but it is **bidirectional**: after the handshake, both sides push messages freely with minimal per-message overhead. Latency is as low as the network allows in *both* directions, and there is no per-message header tax.
+
+## Side by side
+
+| Approach | Direction | Latency to client | Per-message overhead | Best when |
+| --- | --- | --- | --- | --- |
+| HTTP request/response | Client → server (one-shot) | N/A (no push) | One full cycle per request | Pages, forms, plain APIs |
+| Short polling | Client asks repeatedly | Up to one interval | High (mostly empty) | Trivial, occasional checks |
+| Long polling | Client asks, server holds | Near real-time | One cycle per event | Real-time-ish on plain HTTP |
+| SSE | Server → client only | Near real-time | Low (one stream) | Server push, no client uplink |
+| WebSocket | Both directions | Lowest, both ways | Lowest (framed messages) | Interactive, two-way real-time |
+
+## How to choose
+
+- If the client only ever **reads** a stream of server events — a news feed, a live log tail, progress updates — **SSE** is simpler and rides on plain HTTP infrastructure.
+- If both sides need to send frequently and interactively — chat, collaboration, games, live controls — **WebSockets** are the natural fit.
+- If you need something today on the most basic infrastructure and traffic is light, **long polling** is a reasonable stopgap; **short polling** only for the truly trivial.
+
+<Callout title="The distinction that trips people up">
+**SSE is server → client only.** **WebSockets are bidirectional.** If your client never needs to push over the same channel, SSE may be all you need; the moment you need genuine two-way traffic, reach for WebSockets.
+</Callout>
+
+export const quizVs = [
+  {
+    q: 'What is the key limitation of Server-Sent Events compared to WebSockets?',
+    options: [
+      'SSE cannot reconnect automatically',
+      'SSE is one-way: server to client only',
+      'SSE does not work over HTTP',
+      'SSE cannot stream text',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why does short polling tend to have high overhead?',
+    options: [
+      'It compresses every response',
+      'Most requests return no new data yet still pay full request/response cost',
+      'It keeps thousands of sockets open at once',
+      'It encrypts each message twice',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'You are building an interactive collaborative whiteboard where every user both sends and receives edits constantly. Which fits best?',
+    options: [
+      'Short polling',
+      'Server-Sent Events',
+      'WebSockets',
+      'Plain HTTP request/response',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'How does long polling reduce latency compared to short polling?',
+    options: [
+      'It sends many requests per second',
+      'The server holds the request open and responds the moment an event occurs',
+      'It switches to UDP',
+      'It caches responses on the client',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="websocket-foundations/vs-http-polling-sse" questions={quizVs} />
+
+<ProgressTracker client:visible id="websocket-foundations/vs-http-polling-sse" />

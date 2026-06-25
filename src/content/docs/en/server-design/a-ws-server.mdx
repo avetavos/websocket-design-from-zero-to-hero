@@ -1,0 +1,155 @@
+---
+title: 'A WebSocket Server'
+description: 'The ws library hands-on: WebSocketServer with a port or attached to an HTTP server, the connection event, ws.on(message), and ws.send.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Time to write an actual server. In Node, the de-facto library is [`ws`](/websocket-design-from-zero-to-hero/en/server-design/) — small, fast, and close to the protocol. This lesson walks through its three load-bearing pieces: creating the server, the `connection` event, and the per-socket `message`/`send` calls.
+
+## Creating the server
+
+There are two common ways to stand up a `WebSocketServer`. The first lets `ws` own a port directly:
+
+```ts
+import { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('listening', () => {
+  console.log('listening on ws://localhost:8080');
+});
+```
+
+That is perfect for a standalone WebSocket service. But most real apps already serve HTTP — a REST API, a health check, static files — and want WebSockets on the **same** port. For that you attach `ws` to an existing HTTP server instead:
+
+```ts
+import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
+
+const server = createServer((req, res) => {
+  res.writeHead(200);
+  res.end('ok'); // ordinary HTTP still works here
+});
+
+// No port here — ws piggybacks on the HTTP server's upgrade events.
+const wss = new WebSocketServer({ server });
+
+server.listen(8080);
+```
+
+The difference matters: with `{ server }`, the HTTP server receives the `Upgrade` request and hands the socket to `ws`, so HTTP and WebSocket share one listener. Use `{ port }` for a dedicated socket service; use `{ server }` (or `{ noServer: true }` for full manual control of the upgrade) when WebSockets live alongside an HTTP app.
+
+<Mermaid title="A connection's path from upgrade request to message handling" code={flowDiagram} />
+
+export const flowDiagram = `flowchart TB
+  REQ["HTTP request<br/>Upgrade: websocket"] --> WSS["WebSocketServer"]
+  WSS -- "valid upgrade" --> CONN["connection event<br/>(ws, req)"]
+  CONN --> H1["ws.on('message', ...)"]
+  CONN --> H2["ws.send(...)"]
+  CONN --> H3["ws.on('close', ...)"]
+  H1 -- "frame arrives" --> APP["your routing logic"]
+  APP --> H2`;
+
+## The connection event
+
+Every accepted upgrade fires one `connection` event. Its callback receives the freshly connected socket `ws` and the original upgrade request `req`:
+
+```ts
+wss.on('connection', (ws, req) => {
+  // This runs ONCE per client. Everything here is scoped to that one socket.
+  console.log('a client connected from', req.socket.remoteAddress);
+  ws.send('welcome');
+});
+```
+
+Two things to internalise. First, this handler runs **once per client** — if a hundred people connect, it fires a hundred times, each with a different `ws`. Second, `req` is the HTTP upgrade request, which is where you read cookies, headers, or the URL to figure out *who* just connected (we lean on that in the next lesson).
+
+## Receiving and sending
+
+Inside the connection handler, the socket is an event emitter. Listen for `message` to receive frames and call `send` to push data back:
+
+```ts
+wss.on('connection', (ws) => {
+  ws.on('message', (data) => {
+    // `data` is a Buffer (or array of Buffers). Convert it to text.
+    const text = data.toString();
+    console.log('received:', text);
+    ws.send(`you said: ${text}`);
+  });
+
+  ws.on('close', (code) => console.log('client gone, code', code));
+  ws.on('error', (err) => console.error('socket error:', err.message));
+});
+```
+
+One subtlety that trips up newcomers: in `ws`, the `message` payload arrives as a **Buffer**, not a string, because frames can carry binary data. Call `.toString()` when you expect text. (If you set `{ binary: false }` or use a parsing layer you can change this, but the raw default is bytes.)
+
+## Run a real one
+
+The demo below is the **body of that `connection` handler** running on a genuine Node `ws` server. Open it in StackBlitz, then `npm run client` to connect. It greets each client, echoes messages with a counter, and reports the close code.
+
+export const serverCode = `// Body of wss.on('connection', (ws, req) => { ... }) — ws/wss/req in scope.
+ws.send('welcome — send me anything');
+
+let count = 0;
+ws.on('message', (data) => {
+  count += 1;
+  const text = data.toString(); // frames arrive as Buffers
+  console.log(\`message #\${count}: \${text}\`);
+  ws.send(\`#\${count} you said: \${text}\`);
+});
+
+ws.on('close', (code) => console.log('client disconnected, code', code));
+ws.on('error', (err) => console.error('socket error:', err.message));`;
+
+<NodeRunner node client:visible code={serverCode} />
+
+Each message you send comes back numbered — proof the `count` variable lives for the lifetime of that one connection, not per message. That per-socket scope is exactly what the next lesson turns into useful per-connection **state**.
+
+<Callout title="The ws server in three lines">
+Create a server with `new WebSocketServer({ port })` or `{ server }` to share an HTTP port. Handle each client in `wss.on('connection', (ws, req) => ...)`. Inside, `ws.on('message', ...)` receives frames (as Buffers — call `.toString()`) and `ws.send(...)` pushes data back.
+</Callout>
+
+export const quizServer = [
+  {
+    q: 'When should you create the server with `new WebSocketServer({ server })` instead of `{ port }`?',
+    options: [
+      'When you want WebSockets to share a port with an existing HTTP server',
+      'When you need a faster connection',
+      'When the client is a browser rather than Node',
+      'When you want to disable TLS',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'How often does the `connection` event callback run?',
+    options: [
+      'Once for the whole server at startup',
+      'Once per message received',
+      'Once per client that connects',
+      'Once every time data is sent',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'In the `ws` library, what type is the `data` argument of the `message` event by default?',
+    options: [
+      'Always a string',
+      'A Buffer (binary), so you call .toString() for text',
+      'A parsed JSON object',
+      'A number',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-design/a-ws-server" questions={quizServer} />
+
+<ProgressTracker client:visible id="server-design/a-ws-server" />

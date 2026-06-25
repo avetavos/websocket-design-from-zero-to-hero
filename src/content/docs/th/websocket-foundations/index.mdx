@@ -1,5 +1,130 @@
 ---
-title: WebSocket Foundations
-description: What WebSockets are, the upgrade handshake, and how they differ from HTTP.
+title: 'พื้นฐาน WebSocket'
+description: 'WebSocket คืออะไร ทำไมแอปแบบเรียลไทม์ถึงต้องใช้มัน และการลองทำ echo ครั้งแรกในเบราว์เซอร์ด้วย WebSocket API ของจริง'
+sidebar:
+  order: 1
 ---
-Coming soon.
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ยินดีต้อนรับ นี่คือโมดูลแรกของ **WebSocket Design — From Zero to Hero** และเมื่อจบหน้านี้เพียงหน้าเดียว คุณจะได้เปิดการเชื่อมต่อ WebSocket ที่ทำงานจริงและเป็นสดจากเบราว์เซอร์ของคุณเอง พร้อมเฝ้าดูข้อความไหลไปมาทั้งสองทิศทาง
+
+## WebSocket คืออะไร?
+
+**WebSocket** คือการเชื่อมต่อแบบ persistent และ full-duplex ที่อยู่บน TCP socket เพียงตัวเดียว มีสองคำตรงนี้ที่แบกความหมายทั้งหมดไว้:
+
+- **Persistent** — เมื่อเปิดแล้วมันจะเปิดค้างไว้ ไม่มีการส่ง request ใหม่ทุกครั้งที่แลกเปลี่ยนข้อมูล ท่อเดิมถูกนำกลับมาใช้ซ้ำจนกว่าฝ่ายใดฝ่ายหนึ่งจะตัดสินใจปิดมัน
+- **Full-duplex** — ทั้งสองปลายสามารถส่งได้ทุกเมื่อ อย่างอิสระ โดยไม่ต้องรอให้อีกฝ่ายร้องขอ เซิร์ฟเวอร์สามารถ push ไปยังไคลเอนต์ได้อย่างอิสระเท่า ๆ กับที่ไคลเอนต์ส่งไปยังเซิร์ฟเวอร์
+
+นั่นคือแนวคิดทั้งหมดในประโยคเดียว: **การเชื่อมต่อที่มีอายุยาวเส้นเดียว ซึ่งฝ่ายใดฝ่ายหนึ่งสามารถพูดได้ทุกเมื่อที่มีอะไรจะพูด**
+
+## ทำไมงานเรียลไทม์ถึงต้องการสิ่งนี้
+
+HTTP ธรรมดาถูกสร้างขึ้นรอบ ๆ พิธีกรรมผลัดกันพูดอย่างสุภาพ: ไคลเอนต์ถาม เซิร์ฟเวอร์ตอบ แล้วหน้าที่ของการเชื่อมต่อก็จบลง สิ่งนี้ทำงานได้สวยงามสำหรับการโหลดหน้าเว็บ แต่ทำงานได้แย่กับสิ่งใดก็ตามที่ต้องการให้รู้สึกว่า *มีชีวิต* — เธรดแชต กระดานคะแนนสด เอกสารที่แชร์กัน ตัวเลื่อนราคา ในแอปเหล่านั้น เหตุการณ์ที่น่าสนใจเกิดขึ้นที่ฝั่ง **เซิร์ฟเวอร์** ในเวลาที่คาดเดาไม่ได้ และไคลเอนต์ก็ไม่มีทางรู้ว่าจะถามเมื่อไหร่
+
+ก่อนที่จะมี WebSocket นักพัฒนาปลอมความมีชีวิตด้วยการถาม *ซ้ำแล้วซ้ำเล่า* (polling) ซึ่งสิ้นเปลืองและช้ากว่าเสมอนิดหน่อย WebSocket ขจัดการถามทั้งหมดทิ้งไป: เซิร์ฟเวอร์เพียงแค่ส่งทันทีที่เหตุการณ์เกิดขึ้น
+
+<Mermaid title="การเชื่อมต่อ persistent เส้นเดียว ข้อความไหลทั้งสองทิศทาง" code={overviewDiagram} />
+
+export const overviewDiagram = `flowchart LR
+  C["Browser client"] -- "send anytime" --> S["Server"]
+  S -- "push anytime" --> C
+  subgraph conn["one long-lived TCP connection"]
+    C
+    S
+  end`;
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+โมดูลนี้ — **พื้นฐาน WebSocket** — คือรากฐานเชิงแนวคิดสำหรับทุกอย่างที่จะตามมา:
+
+1. **พื้นฐาน (คุณอยู่ตรงนี้)** — WebSocket คืออะไร และ echo ของจริงครั้งแรก
+2. **WebSocket คืออะไร** — การเชื่อมต่อเส้นเดียวเทียบกับการไป-กลับหลายรอบของ HTTP และจุดที่มันโดดเด่น
+3. **WebSocket เทียบกับ HTTP, polling และ SSE** — ทางเลือกอื่น ๆ และข้อแลกเปลี่ยนของแต่ละแบบ
+4. **The handshake** — การเชื่อมต่อถือกำเนิดจาก HTTP request ธรรมดาได้อย่างไร
+5. **Frames และโปรโตคอล** — ไบต์เดินทางอย่างไรเมื่อการเชื่อมต่อเปิดอยู่จริง
+
+โมดูลถัด ๆ ไปจะต่อยอดจากสิ่งนี้ไปสู่ client API, การออกแบบข้อความ, วงจรชีวิตของการเชื่อมต่อ, การออกแบบเซิร์ฟเวอร์, การขยายขนาด และความปลอดภัย
+
+## WebSocket ตัวแรกของคุณ
+
+พอกับทฤษฎี โค้ดข้างล่างนี้ทำงาน **ในเบราว์เซอร์ของคุณ** เพื่อให้บทเรียนนี้อยู่ครบในตัวเอง — ไม่ต้องสตาร์ทเซิร์ฟเวอร์ — มันคุยกับ echo socket เล็ก ๆ ในหน้าเพจที่มีพฤติกรรมเหมือนของจริงทุกประการ: มี `onopen`, `onmessage`, `send` และ `close` เหมือนกัน ในแอปจริงบรรทัดเดียวที่เปลี่ยนคือบรรทัดแรก `new WebSocket('wss://your-server')` (เปิดเดโม **StackBlitz** อันใดก็ได้ภายหลังในคอร์สเพื่อรัน Node server ตัวจริง) กด **Run** แล้วเฝ้าดู console
+
+export const echoCode = `(function () {
+  // A tiny in-page echo socket with the SAME API as the browser's WebSocket,
+  // so this runs anywhere. In a real app: const ws = new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0; // CONNECTING
+      setTimeout(() => {
+        this.readyState = 1; // OPEN
+        if (this.onopen) this.onopen({});
+        if (this.onmessage) this.onmessage({ data: 'Welcome — this echo server repeats whatever you send.' });
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  let received = 0;
+  ws.onopen = () => {
+    console.log('connection open');
+    ws.send('hello, server');
+  };
+  ws.onmessage = (event) => {
+    received += 1;
+    console.log('received:', event.data);
+    if (received === 2) ws.close();
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={echoCode} />
+
+คุณควรจะเห็น `connection open` จากนั้นมีบรรทัด received **สอง** บรรทัด — คำทักทายที่เซิร์ฟเวอร์ส่งมาตอนเชื่อมต่อ แล้วตามด้วย `hello, server` ของคุณเองที่ถูก echo กลับมาตรง ๆ — แล้วจึงเป็น `closed` การไป-กลับนั้น — open, send, receive, close — คือรูปร่างทั้งหมดของทุกแอป WebSocket ที่คุณจะสร้างขึ้น สลับ in-page socket เป็น `new WebSocket(url)` แล้วโค้ดที่ห่อหุ้มอยู่ก็เหมือนกันเป๊ะ
+
+<Callout title="โมเดลความคิดที่ต้องจำไว้">
+WebSocket คือ TCP connection เส้นเดียวที่เปิดค้างไว้ และเปิดให้ **ทั้งสอง** ฝ่ายส่งข้อความได้ทุกเมื่อที่ต้องการ จดจำภาพนี้ไว้ ทุกบทเรียนในคอร์สนี้คือการขยายความจากมัน
+</Callout>
+
+export const quizFoundations = [
+  {
+    q: 'คุณสมบัติสองข้อใดที่อธิบายการเชื่อมต่อ WebSocket ได้ดีที่สุด?',
+    options: [
+      'Stateless และผูกกับ request',
+      'Persistent และ full-duplex',
+      'ทางเดียวและมีอายุสั้น',
+      'เข้ารหัสและเป็น request/response เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม HTTP ธรรมดาถึงไม่เหมาะกับฟีเจอร์เรียลไทม์อย่างแชตสด?',
+    options: [
+      'HTTP ไม่สามารถส่งข้อมูลที่เป็นข้อความได้',
+      'เซิร์ฟเวอร์ไม่มีวิธีในตัวที่จะ push เหตุการณ์ตอนที่ไคลเอนต์ไม่ได้กำลังถาม',
+      'การเชื่อมต่อ HTTP ช้ากว่าเครือข่ายเสมอ',
+      'HTTP ไม่สามารถใช้กับ TLS ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในเดโม ทำไม echo server ถึงส่งข้อความกลับมาสองข้อความ?',
+    options: [
+      'เบราว์เซอร์ส่งข้อความซ้ำสองครั้ง',
+      'มันส่งคำทักทายตอนเชื่อมต่อ แล้วจึง echo สิ่งที่คุณส่ง',
+      'WebSocket จะทำสำเนาทุกข้อความเสมอ',
+      'การเชื่อมต่อเปิดใหม่โดยอัตโนมัติ',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="websocket-foundations/index" questions={quizFoundations} />
+
+<ProgressTracker client:visible id="websocket-foundations/index" />

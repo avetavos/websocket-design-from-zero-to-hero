@@ -1,0 +1,117 @@
+---
+title: 'Frames and the Protocol'
+description: 'After the handshake, data travels as frames — text, binary, ping, pong, close — with client masking, fragmentation, and ws:// versus wss://.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The handshake gets the connection open. From that point on, every byte of WebSocket traffic moves in small structured packets called **frames**. You will rarely manipulate a frame by hand — the browser's `WebSocket` API and server libraries do it for you — but knowing what is happening under your `ws.send('hello')` call makes the rest of the course click into place.
+
+## What a frame is
+
+A frame is a compact unit with a tiny header followed by a payload. The header is where the protocol's intelligence lives. It carries, among other things:
+
+- An **opcode** that says what *kind* of frame this is.
+- A **mask** bit and (for client frames) a masking key.
+- A **length** field for the payload.
+- A **FIN** bit indicating whether this frame completes a message.
+
+Your single logical "message" becomes one or more frames on the wire.
+
+## Opcodes: the kinds of frame
+
+A handful of opcodes covers everything WebSockets do:
+
+- **Text** — a UTF-8 string. This is what you get from `ws.send('hello')`.
+- **Binary** — raw bytes, for things like images, audio chunks, or efficient encodings.
+- **Ping** and **Pong** — the heartbeat pair. One side sends a ping; the other is obliged to answer with a pong. They let either end check that the connection is still alive without sending application data. (We will use these heavily when we reach the connection-lifecycle module.)
+- **Close** — a polite "I am shutting this down", optionally carrying a status code and reason. A clean close is both sides exchanging a close frame.
+
+<Mermaid title="Frame opcodes flowing over the open connection" code={frameDiagram} />
+
+export const frameDiagram = `flowchart LR
+  msg["ws.send('hello')"] --> enc["encode as frame(s)"]
+  enc --> op{"opcode?"}
+  op -->|text| t["UTF-8 payload"]
+  op -->|binary| b["raw bytes"]
+  op -->|ping / pong| h["heartbeat"]
+  op -->|close| x["close + status code"]
+  t --> wire["bytes on the wire"]
+  b --> wire
+  h --> wire
+  x --> wire`;
+
+## Masking: client to server
+
+There is one rule that surprises newcomers: **every frame sent from a client to a server must be masked.** The client XORs its payload with a random 4-byte key it includes in the frame; the server unmasks it on arrival. This is not encryption — anyone reading the bytes can reverse it — and `wss://` is what actually protects the data. Masking exists for a narrower reason: to stop a malicious page from crafting WebSocket payloads that confuse old, WebSocket-unaware HTTP proxies sitting between client and server. Server-to-client frames are **not** masked.
+
+## Fragmentation
+
+A large message does not have to be sent as one giant frame. It can be **fragmented** across several frames: the first frame carries the opcode with its FIN bit unset, the middle frames continue the payload, and the final frame sets FIN to mark the end. The receiver reassembles them into one message. This lets a sender begin streaming a message before it knows the full length — handy for large or generated data.
+
+## ws:// versus wss://
+
+Two URL schemes, exactly mirroring the web:
+
+- **`ws://`** — an unencrypted WebSocket connection. Fine for local development; unsafe across the public internet because anyone in between can read and tamper with the frames.
+- **`wss://`** — WebSocket over TLS, the encrypted form. It is the WebSocket equivalent of `https://` and the default you should reach for in production. Every live demo in this course connects with `wss://`.
+
+## You rarely touch any of this
+
+Here is the reassuring part: the API handles frames, masking, and reassembly for you. When you write `ws.send('hello, server')`, the library encodes a masked text frame; when a message arrives, it hands you a clean reassembled string or blob in `onmessage`. You design *messages*; the protocol moves *frames*. Knowing the frame layer simply means you will understand exactly what is happening when we later tune heartbeats, handle binary data, and debug closes.
+
+<Callout title="The frame-layer summary">
+After the handshake, data travels as **frames** with opcodes for text, binary, ping/pong, and close. Client-to-server frames are **masked**, messages can be **fragmented**, and production uses **`wss://`** (TLS). The `WebSocket` API does all of this for you — you work in messages, not frames.
+</Callout>
+
+export const quizFrames = [
+  {
+    q: 'Which set of frame opcodes does the WebSocket protocol use?',
+    options: [
+      'GET, POST, PUT, DELETE',
+      'Text, binary, ping, pong, close',
+      'Open, read, write, flush',
+      'SYN, ACK, FIN, RST',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is true about masking?',
+    options: [
+      'Server-to-client frames must be masked',
+      'Client-to-server frames must be masked, and it is not a substitute for encryption',
+      'Masking encrypts the payload securely',
+      'Masking only applies to binary frames',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When should you use wss:// instead of ws://?',
+    options: [
+      'Only when sending binary data',
+      'In production and anywhere across the public internet, because it adds TLS encryption',
+      'Only for ping and pong frames',
+      'Never — ws:// is always preferred',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does fragmentation let a sender do?',
+    options: [
+      'Encrypt each frame separately',
+      'Split one message across multiple frames, ending when the FIN bit is set',
+      'Send messages without a handshake',
+      'Skip the masking requirement',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="websocket-foundations/frames-and-protocol" questions={quizFrames} />
+
+<ProgressTracker client:visible id="websocket-foundations/frames-and-protocol" />

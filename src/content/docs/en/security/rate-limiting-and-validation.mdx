@@ -1,0 +1,139 @@
+---
+title: 'Rate Limiting and Validation'
+description: 'Clients can flood you — apply per-connection token-bucket rate limits, cap message size, and validate every message defensively.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+An open WebSocket is an open invitation. Once the handshake is done, a client can send as many messages as it likes, as large as it likes, in whatever shape it likes — and the server will dutifully try to handle every one. A buggy client, or a hostile one, can turn that generosity into a denial of service. This lesson is about three cheap defences that keep one connection from ruining the party: **rate limiting**, **size caps**, and **defensive validation**.
+
+## Clients can flood you
+
+There is no built-in throttle on a WebSocket. A `while (true) ws.send(...)` loop in the browser will fire thousands of frames a second at your server. Each one wakes your event loop, allocates, parses, and runs your handler. Multiply that by the number of connected clients and a single abusive peer can saturate CPU, exhaust memory, or push so much work onto the loop that *every other* client's messages are delayed. You need a ceiling, and it has to be **per connection** so one client's misbehaviour cannot consume everyone else's budget.
+
+## Token bucket: a rate limit that allows bursts
+
+The classic algorithm is the **token bucket**. Each connection owns a bucket with a maximum **capacity** of tokens. Tokens **refill** at a steady rate over time. Every message **costs** one token: if a token is available, the message is processed and a token is removed; if the bucket is empty, the message is rejected (or the connection is closed for repeated abuse).
+
+The shape of this is exactly what you want for chat-like traffic: a user can send a short **burst** (spend the whole bucket at once), but their **sustained** rate is capped by the refill rate. Pick a capacity of, say, 10 and a refill of 5 per second and you get "10 in a burst, then 5/sec after that."
+
+<Mermaid title="Token bucket: tokens refill over time; each message spends one" code={bucketDiagram} />
+
+export const bucketDiagram = `flowchart TB
+  R["Refill: +rate tokens/sec<br/>(capped at capacity)"] --> B["Bucket<br/>(0 … capacity tokens)"]
+  M["Incoming message"] --> Q{"tokens >= 1 ?"}
+  B --> Q
+  Q -- "yes: spend 1 token" --> P["Process message"]
+  Q -- "no: bucket empty" --> D["Reject / throttle<br/>(close on repeat abuse)"]`;
+
+## Validate every message defensively
+
+Rate limiting bounds *how many*; validation bounds *what*. Treat every incoming frame as hostile until proven otherwise:
+
+- **Cap the size first.** Reject frames larger than a sane limit (a few KB for chat, more for known payloads) **before** you parse them. Most WebSocket libraries let you set a `maxPayload` so oversized frames are rejected at the protocol level — use it, then double-check in your handler.
+- **Parse in a `try/catch`.** A `JSON.parse` on attacker input *will* throw eventually. Catch it; never let a malformed frame crash the connection or the process.
+- **Validate the shape.** Confirm `type` is a known string, required fields exist and have the right types, strings are within length, numbers are in range. Reject anything that does not match a known message shape — do not "best effort" your way through garbage.
+
+## A runnable token-bucket and validation demo
+
+Because rate limiting is pure logic, the demo below runs **in the page** — no server needed. It implements a token bucket and a defensive validator, then replays a burst of messages (some valid, some malformed, some oversized) and shows which are accepted, throttled, or rejected. The same `consume()` and `validate()` functions drop straight into a real `ws.on('message')` handler.
+
+export const bucketDemoCode = `(function () {
+  // --- Token bucket: capacity 5, refill 2 tokens/sec ---
+  function makeBucket(capacity, refillPerSec) {
+    return { tokens: capacity, capacity: capacity, rate: refillPerSec, last: Date.now() };
+  }
+  function consume(b) {
+    const now = Date.now();
+    b.tokens = Math.min(b.capacity, b.tokens + ((now - b.last) / 1000) * b.rate);
+    b.last = now;
+    if (b.tokens >= 1) { b.tokens -= 1; return true; }
+    return false;
+  }
+
+  // --- Defensive validation ---
+  const MAX_BYTES = 64;
+  function validate(raw) {
+    if (raw.length > MAX_BYTES) return { ok: false, reason: 'too large' };
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return { ok: false, reason: 'bad json' }; }
+    if (typeof msg !== 'object' || msg === null) return { ok: false, reason: 'not an object' };
+    if (msg.type !== 'chat') return { ok: false, reason: 'unknown type' };
+    if (typeof msg.text !== 'string' || msg.text.length === 0) return { ok: false, reason: 'bad text' };
+    return { ok: true, msg: msg };
+  }
+
+  // --- Simulate a burst of incoming frames over one connection ---
+  const bucket = makeBucket(5, 2);
+  const incoming = [
+    '{"type":"chat","text":"hi"}',
+    '{"type":"chat","text":"how are you"}',
+    'not json at all',
+    '{"type":"chat","text":"' + 'x'.repeat(100) + '"}',
+    '{"type":"delete","text":"nope"}',
+    '{"type":"chat","text":"msg 3"}',
+    '{"type":"chat","text":"msg 4"}',
+    '{"type":"chat","text":"flood 1"}',
+    '{"type":"chat","text":"flood 2"}',
+    '{"type":"chat","text":"flood 3 — over budget"}',
+  ];
+
+  for (const raw of incoming) {
+    if (!consume(bucket)) { console.log('THROTTLED (bucket empty):', raw.slice(0, 28)); continue; }
+    const v = validate(raw);
+    if (!v.ok) { console.log('REJECTED (' + v.reason + '):', raw.slice(0, 28)); continue; }
+    console.log('ACCEPTED:', v.msg.text);
+  }
+  console.log('tokens left:', bucket.tokens.toFixed(2));
+})();`;
+
+<NodeRunner client:visible code={bucketDemoCode} />
+
+Run it and read the verdicts: the malformed and oversized and unknown-type frames are **rejected** by the validator, and once the burst drains the five-token bucket the trailing frames are **throttled** regardless of their content. Two independent guards — one on *rate*, one on *shape* — and a single connection can no longer flood or confuse the server.
+
+<Callout title="Bound the rate and the shape, per connection">
+A WebSocket has no built-in throttle, so add one: a **per-connection token bucket** caps how many messages a client can send, a **size cap** (use the library's `maxPayload`) stops oversized frames, and **`try/catch` parsing plus shape validation** stops malformed ones. Apply all three to every connection — one abusive client must never be able to starve the rest.
+</Callout>
+
+export const quizRate = [
+  {
+    q: 'What property makes a token bucket well suited to chat-style traffic?',
+    options: [
+      'It blocks all bursts and enforces a perfectly constant rate',
+      'It allows a short burst up to the bucket capacity, then caps the sustained rate at the refill rate',
+      'It never rejects any message',
+      'It rate-limits globally rather than per connection',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why should rate limiting be per connection rather than global?',
+    options: [
+      'Global limits are impossible to implement',
+      'So that one abusive client cannot consume the budget that other clients need',
+      'Because the Origin header is per connection',
+      'Because WebSockets cannot count globally',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the safe way to handle an incoming JSON message frame?',
+    options: [
+      'Parse it directly and trust its fields',
+      'Cap its size, parse it in try/catch, then validate the type and field shapes before using it',
+      'Only check that it is valid JSON',
+      'Reject every message that is not empty',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="security/rate-limiting-and-validation" questions={quizRate} />
+
+<ProgressTracker client:visible id="security/rate-limiting-and-validation" />

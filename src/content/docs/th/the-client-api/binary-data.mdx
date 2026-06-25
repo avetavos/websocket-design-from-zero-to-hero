@@ -1,0 +1,182 @@
+---
+title: 'Binary Data'
+description: 'text กับ binary frame, การตั้งค่า binaryType, การส่ง ArrayBuffer, Blob และ TypedArray, การเฝ้าดู bufferedAmount และเดโม echo แบบ ArrayBuffer ที่รันได้จริง'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+จนถึงตอนนี้ทุกข้อความเป็นสตริง แต่ WebSocket ก็พก **ไบต์** ได้อย่างมีความสุขเช่นกัน — รูปภาพ, เสียง, protocol buffer, สถานะเกมที่ถูกอัดแน่นในรูปแบบ binary บทเรียนสุดท้ายนี้ครอบคลุม frame สองรสชาติ, วิธีที่เบราว์เซอร์ส่ง binary data กลับมาให้คุณ และวิธีจับตาดูว่ามีข้อมูลรอจะออกไปอยู่เท่าไร
+
+## text กับ binary frame
+
+ในระดับโปรโตคอล ทุกข้อความ WebSocket เป็นได้ทั้ง **text** frame หรือ **binary** frame:
+
+- **text** frame พก text ที่เข้ารหัสแบบ UTF-8 คุณสร้างมันโดยส่งสตริงเข้า `send()` และรับมันกลับมาเป็นสตริง
+- **binary** frame พกไบต์ดิบโดยไม่มีสมมติฐานเรื่องการเข้ารหัส คุณสร้างมันโดยส่ง binary data เข้า `send()`
+
+ฝั่งรับจะถูกบอกว่า frame นั้นเป็นชนิดใด จึงไม่มีวันกำกวมระหว่าง "สตริงสี่ตัวอักษร 1234" กับ "สี่ไบต์ดิบ" คุณเลือกรสชาติเพียงแค่ดูจากสิ่งที่คุณส่งเข้า `send()`
+
+## การส่ง binary
+
+`send()` รับ binary input สามแบบเพิ่มเติมจากสตริง:
+
+```ts
+// An ArrayBuffer — a fixed-length block of raw bytes.
+const buffer = new ArrayBuffer(8);
+ws.send(buffer);
+
+// A TypedArray (or any ArrayBufferView) — a typed view over bytes.
+const bytes = new Uint8Array([1, 2, 3, 4]);
+ws.send(bytes);
+
+// A Blob — file-like binary data, e.g. straight from an <input type="file">.
+const blob = new Blob(['raw content']);
+ws.send(blob);
+```
+
+ทั้งสามแบบถูกส่งเป็น binary frame เดียว `ArrayBuffer` และ `TypedArray` เป็นตัวเลือกปกติเมื่อคุณกำลังประกอบข้อความ binary ในโค้ด ส่วน `Blob` โดดเด่นเมื่อข้อมูลมีอยู่แล้วในรูปไฟล์หรือมาจาก media API
+
+## การรับ binary: binaryType
+
+นี่คือการตั้งค่าหนึ่งเดียวที่สำคัญสำหรับ binary เมื่อ binary frame มาถึง `event.data` ควรเป็นอะไร — `Blob` หรือ `ArrayBuffer`? คุณตัดสินใจด้วย `ws.binaryType`:
+
+```ts
+ws.binaryType = 'arraybuffer'; // event.data will be an ArrayBuffer
+// or
+ws.binaryType = 'blob';        // event.data will be a Blob (the default)
+```
+
+ค่าเริ่มต้นคือ `'blob'` ตั้งเป็น `'arraybuffer'` เมื่อคุณต้องการอ่านไบต์ในทันทีและแบบ synchronous — เช่นเพื่อห่อมันใน `DataView` หรือ `Uint8Array` แล้วดึงฟิลด์ออกมา การอ่าน `Blob` เป็นแบบ asynchronous ดังนั้นสำหรับโปรโตคอล binary ที่ต้องการ latency ต่ำ `'arraybuffer'` มักจะเหมาะกว่า
+
+```ts
+ws.binaryType = 'arraybuffer';
+ws.onmessage = (event) => {
+  if (typeof event.data === 'string') {
+    console.log('text frame:', event.data);
+  } else {
+    const view = new Uint8Array(event.data); // event.data is an ArrayBuffer
+    console.log('binary frame, first byte:', view[0]);
+  }
+};
+```
+
+สังเกตว่า handler `onmessage` เดียวกันต้องแยกแขนงตามชนิดของ `event.data`: เป็นสตริงสำหรับ text frame และเป็น binary type ที่คุณเลือกสำหรับ binary frame
+
+## การเฝ้าดู bufferedAmount
+
+`send()` คืนค่าทันที แต่ไบต์ไม่ได้อยู่บนสายเสมอไป — ถ้าคุณส่งเร็วกว่าที่เครือข่ายจะระบายออก พวกมันจะกองพะเนินอยู่ใน buffer ภายใน ฟิลด์อ่านอย่างเดียว `ws.bufferedAmount` บอกคุณว่ายังมีกี่ไบต์ที่อยู่ในคิว:
+
+```ts
+if (ws.bufferedAmount < 1_000_000) {
+  ws.send(nextChunk); // only push more if the buffer is not backing up
+}
+```
+
+นี่คือสัญญาณ backpressure ของคุณ เมื่อสตรีม binary data ขนาดใหญ่หรือถี่ ๆ ให้ตรวจ `bufferedAmount` ก่อนส่งเพิ่ม ถ้ามันไต่ขึ้นเรื่อย ๆ แสดงว่าคุณกำลังผลิตเร็วกว่าที่การเชื่อมต่อจะพาไปได้ และการเรียก `send()` แบบไม่ดูตาม้าตาเรือจะทำให้หน่วยความจำบวม
+
+<Mermaid title="การเลือกชนิด frame เมื่อคุณส่ง" code={binaryDiagram} />
+
+export const binaryDiagram = `flowchart TD
+  A["You call ws.send(payload)"] --> B{"What did you pass?"}
+  B -- "string" --> T["Text frame (UTF-8)"]
+  B -- "ArrayBuffer / TypedArray / Blob" --> N["Binary frame (raw bytes)"]
+  N --> C{"ws.binaryType on the receiver"}
+  C -- "'arraybuffer'" --> AB["event.data is an ArrayBuffer"]
+  C -- "'blob'" --> BL["event.data is a Blob"]`;
+
+## echo ArrayBuffer แบบสด
+
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ มันตั้ง `binaryType` เป็น `'arraybuffer'`, ส่ง `Uint8Array` เล็ก ๆ และอ่านไบต์ที่ echo กลับมาออกมาตรง ๆ ในแอปจริงมีเพียงบรรทัดแรก — `new WebSocket('wss://your-server')` — ที่เปลี่ยนไป
+
+export const binaryEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      this.binaryType = 'blob';
+      this.bufferedAmount = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) {
+      // Echo back respecting binaryType, like a real binary echo server would.
+      let out = data;
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+        const buf = data instanceof ArrayBuffer ? data : data.buffer;
+        out = this.binaryType === 'arraybuffer' ? buf : new Blob([buf]);
+      }
+      setTimeout(() => { if (this.onmessage) this.onmessage({ data: out }); }, 50);
+    }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  ws.binaryType = 'arraybuffer'; // we want raw bytes back, not a Blob
+  ws.onopen = () => {
+    const payload = new Uint8Array([10, 20, 30, 40]);
+    console.log('sending bytes:', Array.from(payload).join(', '));
+    ws.send(payload);
+    console.log('bufferedAmount right after send:', ws.bufferedAmount);
+  };
+  ws.onmessage = (event) => {
+    const isBinary = event.data instanceof ArrayBuffer;
+    console.log('frame type:', isBinary ? 'binary (ArrayBuffer)' : 'text');
+    if (isBinary) {
+      const view = new Uint8Array(event.data);
+      console.log('received bytes:', Array.from(view).join(', '));
+    }
+    ws.close();
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={binaryEchoCode} />
+
+สี่ไบต์ออกไปเป็น binary frame และกลับมาเป็น `ArrayBuffer` — เพราะเราตั้ง `binaryType = 'arraybuffer'` — ซึ่งจากนั้นเราอ่านผ่าน `Uint8Array` ถ้าเราปล่อย `binaryType` ไว้ที่ค่าเริ่มต้น `'blob'` `event.data` จะกลายเป็น `Blob` ที่ต้องอ่านแบบ asynchronous แทน
+
+<Callout title="binary ในลมหายใจเดียว">
+ส่งสตริงเพื่อให้ได้ text frame หรือส่ง `ArrayBuffer` / `TypedArray` / `Blob` เพื่อให้ได้ binary frame ตอนรับ ตั้ง `ws.binaryType` เป็น `'arraybuffer'` (อ่านระดับไบต์แบบ sync) หรือ `'blob'` (ค่าเริ่มต้น) และแยกแขนงใน `onmessage` ตามชนิดของ `event.data` เมื่อสตรีม ให้คุมจังหวะตาม `ws.bufferedAmount` เพื่อไม่ให้ buffer ขาออกพุ่งหนีไปไม่หยุด
+</Callout>
+
+export const quizBinary = [
+  {
+    q: 'ค่าใดของ ws.binaryType ที่ทำให้ event.data เป็น ArrayBuffer?',
+    options: [
+      "'blob'",
+      "'arraybuffer'",
+      "'buffer'",
+      "'bytes'",
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ข้อใดที่คุณ "ไม่สามารถ" ส่งเข้า ws.send() ได้?',
+    options: [
+      'สตริง',
+      'ArrayBuffer',
+      'ออบเจกต์ JavaScript ธรรมดา (ที่ยังไม่ถูก serialize)',
+      'Blob',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ws.bufferedAmount บอกอะไรคุณ?',
+    options: [
+      'เซิร์ฟเวอร์ตอบรับข้อความไปแล้วกี่ข้อความ',
+      'ยังมีกี่ไบต์ที่อยู่ในคิวและยังไม่ถูกส่ง',
+      'จำนวนไบต์ทั้งหมดที่ได้รับมาจนถึงตอนนี้',
+      'ขนาด frame สูงสุดที่อนุญาต',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="the-client-api/binary-data" questions={quizBinary} />
+
+<ProgressTracker client:visible id="the-client-api/binary-data" />

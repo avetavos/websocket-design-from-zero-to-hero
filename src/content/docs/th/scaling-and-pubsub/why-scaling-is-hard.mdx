@@ -1,0 +1,120 @@
+---
+title: 'ทำไม Scaling จึงยาก'
+description: 'connection state อยู่ใน memory, ต้นทุน CPU และ memory ต่อ connection, การ balance connection ที่มีอายุยืน และการระบุปัญหา cross-instance broadcast อย่างแม่นยำ'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+การ scale stateless HTTP เป็นปัญหาที่แก้ได้แล้วและแทบจะน่าเบื่อ: request เป็นอิสระต่อกัน ดังนั้นคุณแค่วาง server ที่เหมือนกันเพิ่มไว้หลัง load balancer ก็เสร็จ WebSocket ทำลายภาพที่สบายใจนั้นด้วยวิธีเฉพาะเจาะจงสี่แบบ บทเรียนนี้ตั้งชื่อให้แต่ละแบบ เพราะคุณไม่สามารถออกแบบเพื่อเลี่ยงปัญหาที่คุณเพียงแค่รู้สึกถึงมันอย่างคลุมเครือได้
+
+## 1. connection state อยู่ใน memory
+
+handler แบบ request/response สามารถจบงานแล้วลืมทุกอย่างได้ แต่ WebSocket handler ทำแบบนั้นไม่ได้ — จุดสำคัญทั้งหมดคือ connection นั้น*คงอยู่* และการคงอยู่หมายถึงการถือ state ไว้ตลอดอายุของ socket
+
+state นั้นโดยทั่วไปรวมถึง:
+
+- ตัว socket เอง (OS file descriptor และ kernel send/receive buffer)
+- send queue ใด ๆ ที่ library ของคุณเก็บไว้สำหรับ backpressure
+- application data ที่คุณผูกติดไว้ — user id, authenticated session, ชุดของ room หรือ channel ที่ client นี้ subscribe ไว้
+
+```ts
+// A per-connection record. Multiply this by every open socket.
+interface Conn {
+  socket: WebSocket;      // OS descriptor + buffers underneath
+  userId: string;
+  rooms: Set<string>;     // which channels this client joined
+  lastSeen: number;       // for heartbeat/expiry bookkeeping
+}
+
+// This map IS the instance's knowledge of the world.
+// It exists only here, in this process's heap.
+const connections = new Map<string, Conn>();
+```
+
+map ด้านบนคือหัวใจของทั้งโมดูล มันเป็นที่เดียวที่ instance นี้รู้ว่าใครเชื่อมต่ออยู่ — และไม่มี instance อื่นอ่านมันได้
+
+## 2. CPU และ memory มีพื้นต่อ connection
+
+connection HTTP ที่ idle แทบไม่มีต้นทุนเลยเพราะมันแทบไม่มีตัวตนระหว่าง request ส่วน WebSocket ที่ idle นั้นต่างออกไป: แต่ละตัว*เปิดอยู่*จริง ๆ กิน memory ส่วนหนึ่งและ file descriptor หนึ่งตัวไม่ว่ามันจะส่งอะไรอยู่หรือไม่
+
+- **Memory** kernel socket buffer บวกกับ record ต่อ connection ของคุณรวมกันแล้วก็มากขึ้น ไม่กี่กิโลไบต์ต่อตัวฟังดูเล็กน้อย จนกว่าคุณจะนึกได้ว่า 50,000 connection หมายถึงหลายร้อยเมกะไบต์ก่อนที่แอปของคุณจะทำงานอะไรเลย
+- **File descriptor** ทุก socket คือ descriptor และ limit ของ OS (`ulimit -n`) มักเป็นค่าเริ่มต้นที่ต่ำอย่าง 1024 พอชนเพดานแล้ว connection ใหม่ก็เปิดไม่ได้โดยไม่มี application bug ที่ชัดเจน
+- **CPU ตอน fan-out** การส่งหนึ่งข้อความไปยัง client 10,000 ตัวคือการ write แยกกัน 10,000 ครั้ง ต้นทุนการ broadcast เพิ่มตามขนาดผู้รับ และห้องที่คึกคักหนึ่งห้องสามารถดึง core หนึ่งให้ทำงานเต็มที่ได้
+
+ใจความสำคัญ: เพดานของ WebSocket server ถูกกำหนดโดย*จำนวน connection ที่เปิดพร้อมกัน* ไม่ใช่ request ต่อวินาที คุณต้อง scale out ก่อนที่ CPU จะดูยุ่งซะอีก เพียงเพราะคุณ memory หรือ descriptor หมด
+
+## 3. connection ที่มีอายุยืน balance ได้แย่
+
+load balancer กระจาย connection *ใหม่* ไปยัง instance ต่าง ๆ แต่ WebSocket มีอายุยืน ดังนั้นเมื่อ client มาลงที่ instance หนึ่ง มันมักจะอยู่ที่นั่นเป็นนาทีหรือเป็นชั่วโมง
+
+สิ่งนี้มีผลพลอยได้ที่น่าอึดอัดสองอย่าง:
+
+- **load สะท้อนอดีต ไม่ใช่ปัจจุบัน** ถ้า instance A ออนไลน์ระหว่าง traffic พุ่ง มันอาจถือ connection ไว้มากกว่า instance B ที่เริ่มทีหลังมาก — และ balancer ไม่สามารถ rebalance socket ที่ใช้งานอยู่ได้โดยไม่ตัดผู้คนออก
+- **การ deploy สร้างความปั่นป่วน** การ restart instance ตัดทุก connection ที่มันถือไว้ client ทั้งหมดเหล่านั้น reconnect พร้อมกันและ balancer ก็ผลักพวกเขาไปยัง instance ที่เหลืออยู่ สร้าง stampede ขึ้น (มีรายละเอียดเพิ่มในบทเรียน presence)
+
+<Mermaid title="การ restart ตัด connection ที่ใช้งานอยู่ ทั้งหมด reconnect พร้อมกัน" code={rebalanceDiagram} />
+
+export const rebalanceDiagram = `flowchart TB
+  lb["Load balancer"]
+  A["Instance A — 8k sockets"]
+  B["Instance B — 2k sockets"]
+  lb --> A
+  lb --> B
+  A -- "deploy / crash" --> X["A's 8k sockets drop"]
+  X == "all reconnect at once" ==> lb
+  lb == "stampede onto survivors" ==> B`;
+
+## 4. ปัญหา cross-instance broadcast อย่างแม่นยำ
+
+ตอนนี้เราสามารถระบุปัญหาหลักได้โดยไม่ต้องพูดลอย ๆ
+
+> broadcast บน instance A iterate ผ่าน `A.connections` ส่วน client ที่เชื่อมต่อกับ instance B อยู่ใน `B.connections` ซึ่ง A อ่านไม่ได้ ดังนั้น broadcast จึง**ไม่สามารถ**ไปถึง client นั้นได้ — ไม่ใช่ช้า ไม่ใช่ไม่น่าเชื่อถือ แต่ไม่มีวันเลย เพราะไม่มีเส้นทางโค้ดใดอยู่ระหว่าง heap ทั้งสอง
+
+นี่ไม่ใช่ bug ที่จะแก้ด้วย retry หรือ buffer ที่ใหญ่ขึ้น มันเป็นข้อเท็จจริงเชิงโครงสร้าง: process สองตัวไม่แชร์ memory กัน ทางแก้เดียวคือการเพิ่ม *channel ระหว่าง instance* เพื่อให้ข้อความที่ publish ที่ใดก็ตามถูกส่งไปทุกที่ — ซึ่งก็คือ backplane ในบทเรียนถัดไปนั่นเอง
+
+<Callout title="สี่ปัญหา หนึ่งราก">
+connection state ใน memory, พื้นทรัพยากรต่อ connection, load ที่ติดอยู่กับ connection อายุยืน และ client ที่เข้าไม่ถึงบน instance อื่น ทั้งหมดสืบย้อนกลับไปยังรากเดียวกัน: แต่ละ connection — และความรู้เกี่ยวกับมัน — อยู่ภายใน process เดียว ทุกเทคนิคการ scaling ในโมดูลนี้คือวิธีหลีกเลี่ยงปัญหานั้น
+</Callout>
+
+export const quizHard = [
+  {
+    q: 'ทำไม WebSocket server จึงมักจะที่ไม่พอก่อนที่ CPU จะดูยุ่ง?',
+    options: [
+      'เพราะการเข้ารหัส TLS ใช้ CPU หนักมาก',
+      'เพราะแต่ละ connection ที่เปิดอยู่กิน memory และ file descriptor แม้ในขณะที่ idle',
+      'เพราะ load balancer จำกัด throttle traffic ของ WebSocket',
+      'เพราะ Node.js ใช้ได้มากกว่าหนึ่ง core ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม load ที่ใช้งานอยู่จึงมักไม่สม่ำเสมอข้าม WebSocket instance?',
+    options: [
+      'load balancer ส่งทุกอย่างไปยัง instance แรกเสมอ',
+      'connection ที่มีอายุยืนอยู่ที่ที่มันมาลง ดังนั้น load จึงสะท้อน traffic ในอดีต ไม่ใช่ปัจจุบัน',
+      'instance ที่ใหม่กว่าปฏิเสธ connection',
+      'WebSocket ย้ายระหว่าง server แบบสุ่ม',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม retry หรือ buffer ที่ใหญ่ขึ้นจึงแก้ปัญหา cross-instance broadcast ไม่ได้?',
+    options: [
+      'retry ช้าเกินไปสำหรับแอป real-time',
+      'process สองตัวไม่แชร์ memory กัน ดังนั้นจึงไม่มีเส้นทางโค้ดใดไปถึง socket ของอีก instance หนึ่ง',
+      'buffer ล้นก่อนที่ข้อความจะถูกส่ง',
+      'load balancer block การส่งซ้ำ ๆ',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="scaling-and-pubsub/why-scaling-is-hard" questions={quizHard} />
+
+<ProgressTracker client:visible id="scaling-and-pubsub/why-scaling-is-hard" />

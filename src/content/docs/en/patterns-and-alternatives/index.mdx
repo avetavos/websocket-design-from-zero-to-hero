@@ -1,0 +1,96 @@
+---
+title: 'Patterns & Alternatives'
+description: 'The handful of message patterns most real-time apps reuse, how to pick a transport for the job, and what this module covers.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+By now you can open a socket, design messages, keep a connection alive, and broadcast from a server. This final module zooms out from *mechanics* to *shapes*. Once you have watched a few real-time systems get built, you notice the same handful of patterns appearing again and again — and you notice that a WebSocket is sometimes not even the right tool. This lesson maps that territory before the rest of the module fills it in.
+
+## The patterns you keep reinventing
+
+A persistent, two-way connection is a blank canvas. That freedom is exactly why teams accidentally reinvent the same structures. Three of them cover the overwhelming majority of real-time features:
+
+- **Publish / subscribe.** A client declares interest in some topics — a chat room, a stock symbol, a document id — and the server delivers only the events that match. Nobody receives a firehose of everything; each client gets a tailored slice. This is the backbone of almost every multi-user app.
+- **Request / response (RPC).** Sometimes the client genuinely wants *an answer to this specific question*. Over a one-way message pipe there is no built-in "reply to this", so you build one: tag the request with an id and resolve a promise when the reply with the same id arrives.
+- **Fire-and-forget events.** A client emits something — "cursor moved to (x, y)", "user is typing" — and expects no reply at all. The cheapest pattern, and the one WebSockets were practically designed for.
+
+Most production protocols are just these three composed together over one connection: subscribe to a room, RPC to fetch its history, then fire-and-forget every keystroke.
+
+## How to choose a transport
+
+Before reaching for a WebSocket reflexively, it is worth asking what the data actually *needs*. The honest answer is often "less than a full duplex socket". A quick way to decide:
+
+<Mermaid title="Choosing a real-time transport by what the data needs" code={chooseDiagram} />
+
+export const chooseDiagram = `flowchart TD
+  start["Does the client need to send<br/>messages mid-stream too?"]
+  start -- "No, only receive" --> sse["Server-Sent Events<br/>(simple, auto-reconnect, HTTP)"]
+  start -- "Yes, both directions" --> freq["High-frequency or<br/>unordered media/datagrams?"]
+  freq -- "No, ordinary messages" --> ws["WebSocket<br/>(bidirectional, ordered)"]
+  freq -- "Yes" --> wt["WebTransport<br/>(HTTP/3, streams + datagrams)"]
+  sse -. "no SSE / proxy strips it" .-> poll["Long-polling fallback"]
+  ws -. "blocked by proxy" .-> poll`;
+
+The point is not that WebSockets are bad — they are the default for genuinely bidirectional traffic. The point is that "real-time" is not one requirement. A live price ticker only flows server-to-client, so Server-Sent Events are simpler and reconnect themselves. A multiplayer game tolerates dropped, out-of-order packets, so WebTransport datagrams fit better. Match the transport to the traffic and you carry less complexity.
+
+## What this module covers
+
+This module — **Patterns & Alternatives** — turns those shapes into things you can build and choose between:
+
+1. **Patterns & Alternatives (you are here)** — the common patterns and how to pick a transport.
+2. **Pub/sub and rooms** — subscribe to topics, receive only what you asked for, with a runnable in-page demo.
+3. **RPC over WebSocket** — correlation ids and promises that resolve on the matching reply, with timeouts.
+4. **WebSocket vs SSE vs WebTransport** — choosing between the bidirectional socket, the one-way stream, the fallback, and the new HTTP/3 transport.
+5. **Building a real-time app** — tie rooms, heartbeats, auth, and reconnect together into one small service on a real `ws` server.
+
+## Where this fits
+
+Everything earlier was a building block; this module is the assembly instructions. If a concept here feels thin, the foundations are one click away: the [client API](/websocket-design-from-zero-to-hero/en/the-client-api/), [message design](/websocket-design-from-zero-to-hero/en/message-design/), the [connection lifecycle](/websocket-design-from-zero-to-hero/en/connection-lifecycle/), [server design](/websocket-design-from-zero-to-hero/en/server-design/), and [scaling with pub/sub](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/) all feed directly into what we build next.
+
+<Callout title="The mental shift">
+Stop asking "how do I use a WebSocket?" and start asking "what shape is my traffic?" Most features are **pub/sub**, **RPC**, or **fire-and-forget** — and some of them do not need a WebSocket at all. Picking the right pattern and transport up front is most of the design work.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Which three patterns cover most real-time features built over one connection?',
+    options: [
+      'GET, POST, and DELETE',
+      'Publish/subscribe, request/response (RPC), and fire-and-forget events',
+      'Polling, caching, and pagination',
+      'TLS, compression, and authentication',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When the client only needs to receive a one-way stream and never send mid-connection, which transport is the simpler fit?',
+    options: [
+      'A full WebSocket',
+      'Server-Sent Events',
+      'WebTransport datagrams',
+      'A raw TCP socket',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the core idea behind the publish/subscribe pattern?',
+    options: [
+      'Every client receives every event the server emits',
+      'A client declares interest in topics and receives only matching events',
+      'The server polls each client for updates',
+      'Clients exchange messages directly without a server',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="patterns-and-alternatives/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="patterns-and-alternatives/index" />

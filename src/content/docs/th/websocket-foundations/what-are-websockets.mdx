@@ -1,0 +1,149 @@
+---
+title: 'WebSocket คืออะไร?'
+description: 'การเชื่อมต่อสองทิศทางที่มีอายุยาวเส้นเดียว เทียบกับการแลกเปลี่ยน HTTP สั้น ๆ หลายครั้ง กรณีใช้งานที่ต้องการมัน และเดโม echo แบบสด'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ในบทเรียนแรกเราบอกว่า WebSocket คือ *การเชื่อมต่อแบบ persistent และ full-duplex เส้นเดียว* บทเรียนนี้จะค่อย ๆ เจาะลงไปที่ **ทำไมประโยคเดียวนี้ถึงเปลี่ยนวิธีที่คุณสร้างซอฟต์แวร์** — และให้คุณได้สัมผัสมันด้วยเดโมสดอีกอันหนึ่ง
+
+## การเชื่อมต่อเส้นเดียว ไม่ใช่หลายเส้น
+
+ลองนึกภาพว่าเบราว์เซอร์คุยกับเซิร์ฟเวอร์ตามปกติอย่างไร ทุกการโต้ตอบคือธุระแยกกันที่จบในตัวเอง:
+
+- เปิดการเชื่อมต่อ (หรือยืมจาก pool ที่มีอยู่)
+- ส่ง request
+- รับ response
+- การแลกเปลี่ยนจบลง เซิร์ฟเวอร์ลืมคุณไป
+
+ถ้าหน้าหนึ่งต้องการข้อมูลสิบชิ้น นั่นก็คือสิบธุระในเชิงแนวคิด แต่ละธุระแบกตัว header ของมันเอง ต้นทุนการตั้งต้นของมันเอง และ — ที่สำคัญ — ไหลไปในทิศทางที่ **ไคลเอนต์** เป็นผู้เริ่มเท่านั้น เซิร์ฟเวอร์พูดก่อนไม่ได้ มันทำได้แค่ตอบ
+
+WebSocket แทนที่รูปแบบทั้งหมดนั้นด้วยสายเปิดเส้นเดียว:
+
+<Mermaid title="การแลกเปลี่ยน HTTP สั้น ๆ หลายครั้ง เทียบกับ WebSocket แบบ persistent เส้นเดียว" code={shapeDiagram} />
+
+export const shapeDiagram = `flowchart TB
+  subgraph http["HTTP — many short exchanges"]
+    direction LR
+    c1["client"] -- "req 1" --> s1["server"]
+    s1 -- "res 1" --> c1
+    c2["client"] -- "req 2" --> s2["server"]
+    s2 -- "res 2" --> c2
+    c3["client"] -- "req 3" --> s3["server"]
+    s3 -- "res 3" --> c3
+  end
+  subgraph ws["WebSocket — one persistent connection"]
+    direction LR
+    cw["client"] <--> sw["server"]
+  end`;
+
+เมื่อสายนั้นเปิดแล้ว การส่งข้อความก็ถูก: ไม่มีการเชื่อมต่อใหม่ให้ต้องเจรจา และไม่มี header overhead ต่อ request และเพราะสายนั้นเป็นสองทางอย่างแท้จริง เซิร์ฟเวอร์จึงส่งข้อความได้ทันทีที่มีอะไรเกิดขึ้น — บรรทัดแชตใหม่ ราคาที่เปลี่ยนไป การแก้ไขของผู้ใช้คนอื่น — โดยที่ไคลเอนต์ไม่เคยต้องร้องขอเลย
+
+## ความแตกต่างที่นิยามทุกอย่าง
+
+มันช่วยให้เข้าใจขึ้นถ้าวางทั้งสองแบบเทียบกันเป็นร้อยแก้วธรรมดาแทนไดอะแกรม:
+
+- **HTTP request/response** คือ *ไคลเอนต์เป็นผู้เริ่มและจบในครั้งเดียว* ไคลเอนต์ถาม เซิร์ฟเวอร์ตอบ จบ การจะรู้เรื่องเหตุการณ์ใหม่ ไคลเอนต์ต้องถามอีกครั้ง
+- **WebSocket** คือ *ฝ่ายใดฝ่ายหนึ่งเริ่มได้และต่อเนื่อง* หลังการตั้งต้นครั้งเดียว ทั้งสองปลายถือการเชื่อมต่อเดิมเปิดค้างไว้ และ push ข้อความข้ามมันได้นานเท่าที่ต้องการ
+
+การเปลี่ยนผ่านนั้น — จาก "ถามซ้ำแล้วซ้ำเล่า" ไปสู่ "เชื่อมต่อค้างไว้แล้วฟัง" — คือคุณค่าทั้งหมดที่นำเสนอ
+
+## จุดที่ WebSocket โดดเด่น
+
+WebSocket คือเครื่องมือที่ถูกต้องเมื่อใดก็ตามที่เซิร์ฟเวอร์ต้อง **push** ข้อมูลที่ไคลเอนต์ไม่อาจคาดเดาล่วงหน้าได้:
+
+- **แชตและการส่งข้อความ** — ข้อความจากผู้ใช้คนหนึ่งต้องไปถึงคนอื่นทันที โดยไม่ต้อง polling
+- **ฟีดข้อมูลสด** — ราคา คะแนน ค่าจากเซ็นเซอร์ แดชบอร์ดที่อัปเดตตามโลกที่เปลี่ยนไป
+- **การทำงานร่วมกัน** — เอกสารที่แชร์กัน ไวต์บอร์ด และเครื่องมือออกแบบที่ทุกการกดแป้นหรือการเลื่อนเคอร์เซอร์ส่งต่อไปยังทุกคน
+- **การแจ้งเตือนและสถานะการมีอยู่** — "มีออเดอร์ใหม่เข้ามา", "Sam กำลังพิมพ์", "บิลด์ของคุณเสร็จแล้ว"
+- **มัลติเพลเยอร์และเกม** — การอัปเดตสถานะที่ latency ต่ำ พุ่งไปมาทั้งสองทางหลายครั้งต่อวินาที
+
+เส้นด้ายร่วมกัน: เหตุการณ์เกิดขึ้นที่ฝั่งเซิร์ฟเวอร์ในเวลาที่คาดเดาไม่ได้ และ latency มีความสำคัญ นั่นคือช่องว่างที่การเชื่อมต่อแบบ persistent และ bidirectional เข้ามาเติมเต็มพอดี
+
+## สัมผัสมันแบบสด
+
+รันเดโมข้างล่างนี้ มันใช้ in-page echo socket ที่มี `WebSocket` API ของจริง — มี `onopen`/`onmessage`/`send`/`close` เหมือนกัน — จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ มันส่งหนึ่งบรรทัดและพิมพ์สิ่งที่ตอบกลับมา สังเกตว่า หลังจาก `open` ครั้งเดียว การเชื่อมต่อก็แค่ *นั่งพร้อมอยู่ตรงนั้น* — คุณส่งอีกได้ทุกเมื่อโดยไม่ต้องเชื่อมต่อใหม่
+
+export const liveEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app this line is: const ws = new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+        if (this.onmessage) this.onmessage({ data: 'Welcome — this echo server repeats whatever you send.' });
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  let echoes = 0;
+  ws.onopen = () => {
+    console.log('connection is open and ready');
+    ws.send('first message from the browser');
+  };
+  ws.onmessage = (event) => {
+    echoes += 1;
+    console.log('received:', event.data);
+    if (echoes === 2) {
+      console.log('connection is still open — closing it ourselves now');
+      ws.close();
+    }
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={liveEchoCode} />
+
+บรรทัด `received:` แรกคือคำทักทายของเซิร์ฟเวอร์ตอนเชื่อมต่อ ส่วนบรรทัดที่สองคือข้อความของเราเองที่ถูก echo กลับมา เราปิดก็ต่อเมื่อข้อความที่สองมาแล้วเท่านั้น — เป็นการพิสูจน์ว่าการเชื่อมต่อเปิดค้างและใช้งานได้ตลอดเวลา ซึ่งเป็นสิ่งที่ HTTP request/response ให้ไม่ได้เลย
+
+<Callout title="บทสรุปบรรทัดเดียว">
+HTTP คือลำดับของธุระสั้น ๆ ที่ไคลเอนต์เป็นผู้ถาม ส่วน WebSocket คือการเชื่อมต่อเส้นเดียวที่เปิดค้างไว้ เพื่อให้ **ฝ่ายใดฝ่ายหนึ่ง** ส่งข้อความได้ทุกเมื่อที่ต้องการ — ซึ่งเป็นสิ่งที่แชตเรียลไทม์ ฟีดสด และการทำงานร่วมกันต้องการจริง ๆ
+</Callout>
+
+export const quizWhat = [
+  {
+    q: 'อะไรคือสิ่งที่แยก WebSocket ออกจาก HTTP request/response อย่างเป็นรากฐานที่สุด?',
+    options: [
+      'WebSocket ใช้หมายเลขพอร์ตที่ต่างออกไป',
+      'WebSocket เปิดการเชื่อมต่อเส้นเดียวค้างไว้ เพื่อให้ฝ่ายใดฝ่ายหนึ่งส่งได้ทุกเมื่อ',
+      'WebSocket บีบอัดข้อมูลโดยอัตโนมัติ',
+      'WebSocket ทำงานบน TLS เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'สถานการณ์ใดที่เหมาะกับ WebSocket มากที่สุด?',
+    options: [
+      'การดาวน์โหลดไฟล์ขนาดใหญ่ไฟล์เดียวครั้งเดียว',
+      'การให้บริการหน้าการตลาดแบบ static',
+      'แชตสดที่ข้อความต้องไปถึงผู้ใช้ในทันทีที่ถูกส่ง',
+      'การส่งฟอร์มที่ตอบกลับมาเป็นหน้าขอบคุณ',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'หลังจากเดโมพิมพ์บรรทัด "received" แรก ทำไมมันถึงส่งหรือปิดได้โดยไม่ต้องเชื่อมต่อใหม่?',
+    options: [
+      'มันเปิดการเชื่อมต่อใหม่เอี่ยมสำหรับทุก action',
+      'การเชื่อมต่อเส้นเดียวเปิดค้างและพร้อมอยู่หลัง handshake',
+      'เบราว์เซอร์แคช response ของเซิร์ฟเวอร์ไว้',
+      'HTTP keep-alive นำ socket กลับมาใช้ซ้ำให้',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="websocket-foundations/what-are-websockets" questions={quizWhat} />
+
+<ProgressTracker client:visible id="websocket-foundations/what-are-websockets" />

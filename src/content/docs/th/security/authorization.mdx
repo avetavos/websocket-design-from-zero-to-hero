@@ -1,0 +1,125 @@
+---
+title: 'Authorization'
+description: 'Authenticate การเชื่อมต่อครั้งเดียว จากนั้น authorize ทุก message เทียบกับตัวตนจริงของการเชื่อมต่อ — ไม่ใช่ผู้ใช้ที่ไคลเอนต์อ้างว่าเป็น'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ในบทเรียนที่แล้วเราจัดการเรื่อง *ใครอยู่บนการเชื่อมต่อ* บทเรียนนี้เป็นเรื่องคำถามที่ใหญ่กว่ามากซึ่งตามมา: *message ตัวนี้โดยเฉพาะได้รับอนุญาตไหม?* Authentication เกิดขึ้น **ครั้งเดียว**; authorization เกิดขึ้น **ทุก message** การรวมสองสิ่งนี้เข้าด้วยกันเป็นหนึ่งใน WebSocket bug ที่พบบ่อยที่สุดและแพงที่สุด
+
+## Authenticate ครั้งเดียว authorize ทุก action
+
+HTTP API ตรวจ permission ใหม่ในแต่ละ request แทบจะโดยบังเอิญ — แต่ละ request แยกกัน ดังนั้นแต่ละอันจึงวิ่งผ่าน middleware ของคุณ การเชื่อมต่อ WebSocket ทำลายนิสัยนั้น หลังจาก handshake message เป็นร้อยมาถึงบนการเชื่อมต่อที่ authenticate แล้ว **อันเดียว** และมันชวนให้คิดว่า "การเชื่อมต่อนี้ล็อกอินอยู่ ดังนั้น message ของมันก็โอเค"
+
+มันไม่โอเค *ล็อกอินอยู่* ไม่ใช่ *ได้รับอนุญาต* ผู้ใช้ที่ authenticate เป็น `alice` อาจส่ง:
+
+```json
+{ "type": "delete", "room": "admins", "messageId": "42" }
+```
+
+`alice` จะลบ message นั้นได้ไหมไม่เกี่ยวกับว่า `alice` authenticate แล้วหรือไม่ — มันขึ้นอยู่กับ role ของ `alice`, การเป็นสมาชิกในห้องนั้น, และความสัมพันธ์ของเธอกับ message นั้นโดยเฉพาะ การตัดสินใจนั้นต้องทำใหม่ ฝั่งเซิร์ฟเวอร์ ตอนที่มันมาถึง
+
+## อย่าไว้ใจตัวตนที่ไคลเอนต์อ้าง
+
+นี่คือบาปร้ายแรง และมันมีอยู่ทุกที่ message ข้างบนอาจมาถึงในรูปแบบนี้แทน:
+
+```json
+{ "type": "delete", "user": "admin", "room": "admins", "messageId": "42" }
+```
+
+เซิร์ฟเวอร์ที่ไร้เดียงสาอ่าน `msg.user` แล้วคิดว่า "อา admin ขอมา" แต่ไคลเอนต์ *เขียน field นั้นเอง* ไคลเอนต์อ้างเป็นใครก็ได้ ตัวตนที่เชื่อถือได้เพียงอย่างเดียวคือตัวตนที่ **เซิร์ฟเวอร์ของคุณ pin ไว้กับการเชื่อมต่อตอน handshake** — `ws.user` จากบทเรียนที่แล้ว — ซึ่งสร้างจาก credential ที่ validate แล้วและไคลเอนต์ปลอมแปลงไม่ได้
+
+ดังนั้นกฎจึงตรงไปตรงมา: **เพิกเฉยต่อตัวตนใด ๆ ใน body ของ message** Authorize เทียบกับ `ws.user` ค่าที่คุณตั้ง ไม่ใช่เทียบกับ field `user`/`role`/`isAdmin` ที่ไคลเอนต์ส่งมา ถ้าไคลเอนต์เขียนมันได้ มันก็เป็นข้ออ้าง ไม่ใช่ข้อเท็จจริง
+
+<Mermaid title="Authorization ราย message เทียบกับตัวตนที่ pin ไว้ของการเชื่อมต่อ" code={authzDiagram} />
+
+export const authzDiagram = `flowchart TB
+  M["Incoming message<br/>(may CLAIM a user/role)"] --> I["Ignore claimed identity"]
+  I --> ID["Use ws.user — pinned at handshake"]
+  ID --> P{"Is ws.user allowed<br/>to do THIS action<br/>on THIS resource?"}
+  P -- "yes" --> A["Perform action"]
+  P -- "no" --> D["Reject: error frame<br/>(or close on abuse)"]`;
+
+## เดโม authorization ราย message ที่รันได้จริง
+
+เดโมด้านล่างคือ body ของ `ws` connection handler handshake ได้ pin ตัวตนไว้กับ socket แล้ว — ตรงนี้เรา hard-code `ws.user` และตาราง role เพื่อให้เดโมอยู่ครบในตัว จากนั้น **ทุก** message ที่เข้ามาจะถูก authorize: เรา look up role *จริง* ของ `ws.user` และเราจงใจ **เพิกเฉย** ต่อ field `user` ที่ไคลเอนต์ส่งมา `delete` อนุญาตเฉพาะ admin เท่านั้น; `post` อนุญาตทุกคน เปิดมันใน StackBlitz แล้วให้ไคลเอนต์ส่ง message ชนิดต่าง ๆ
+
+export const authzServerCode = `// Body of wss.on('connection', (ws, req) => { ... }). ws/wss/req in scope.
+// Handshake already authenticated this socket. Pin the REAL identity here:
+ws.user = 'alice';                       // came from a validated credential
+const ROLES = { alice: 'member', bob: 'admin' };
+
+function can(user, action) {
+  const role = ROLES[user] || 'guest';   // look up the REAL role server-side
+  if (action === 'post') return true;    // anyone authenticated may post
+  if (action === 'delete') return role === 'admin';
+  return false;
+}
+
+ws.on('message', (data) => {
+  let msg;
+  try { msg = JSON.parse(data.toString()); }
+  catch { ws.send(JSON.stringify({ type: 'error', reason: 'bad json' })); return; }
+
+  // Authorize against ws.user — the pinned identity — NOT msg.user.
+  // Even if the client sends { user: 'admin' }, we never read it.
+  if (!can(ws.user, msg.type)) {
+    console.log(\`DENY \${ws.user} -> \${msg.type} (claimed user: \${msg.user})\`);
+    ws.send(JSON.stringify({ type: 'error', reason: 'forbidden', action: msg.type }));
+    return;
+  }
+
+  console.log(\`ALLOW \${ws.user} -> \${msg.type}\`);
+  ws.send(JSON.stringify({ type: 'ok', action: msg.type }));
+});`;
+
+<NodeRunner node client:visible code={authzServerCode} />
+
+เพราะ `ws.user` คือ `alice` ซึ่งเป็น `member`, `post` จึงได้รับอนุญาตแต่ `delete` ถูกปฏิเสธ — **แม้ว่าไคลเอนต์จะเพิ่ม `"user": "admin"` ลงใน message** เพราะเซิร์ฟเวอร์ไม่เคยอ่าน field นั้น สลับ `ws.user` เป็น `'bob'` แล้ว `delete` จะได้รับอนุญาต นั่นคือวินัยทั้งหมด: ตัวตนมาจากการเชื่อมต่อ, permission ถูกคำนวณใหม่ราย message, และ body ของ message ถูกมองเป็นคำขอ ไม่ใช่แหล่งของความจริง
+
+<Callout title="การเชื่อมต่อรู้ว่าคุณเป็นใคร message ไม่รู้">
+Authenticate **ครั้งเดียว** ที่ handshake แล้ว pin ตัวตนไว้กับ socket Authorize **ทุก** message เทียบกับตัวตนที่ pin ไว้นั้น — ไม่ใช่เทียบกับ user หรือ role ที่ไคลเอนต์ใส่ไว้ใน payload ไคลเอนต์อ้างเป็นใครก็ได้; มีเพียงตัวตนฝั่งเซิร์ฟเวอร์เท่านั้นที่จริง
+</Callout>
+
+export const quizAuthz = [
+  {
+    q: 'How often must authorization run on a WebSocket connection?',
+    options: [
+      'Once, at the handshake — the connection is then trusted',
+      'On every message/action, against the connection’s pinned identity',
+      'Only on messages that change data',
+      'Never — authentication is enough',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A client sends { "type": "delete", "user": "admin" }. What should the server authorize against?',
+    options: [
+      'The "user": "admin" field in the message',
+      'ws.user — the identity pinned to the connection at the handshake',
+      'The Origin header',
+      'Whichever identity is more privileged',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is authenticating the connection not sufficient to allow an action?',
+    options: [
+      'Because tokens always expire instantly',
+      'Because being logged in says who you are, not whether this specific action on this resource is permitted',
+      'Because WebSockets cannot carry identity',
+      'Because the Origin must be rechecked per message',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="security/authorization" questions={quizAuthz} />
+
+<ProgressTracker client:visible id="security/authorization" />

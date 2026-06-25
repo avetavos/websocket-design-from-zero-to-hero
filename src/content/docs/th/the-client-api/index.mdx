@@ -1,0 +1,143 @@
+---
+title: 'The Client API'
+description: 'มองภาพรวม WebSocket API ของเบราว์เซอร์ — วงจรชีวิตของการเชื่อมต่อ สิ่งที่โมดูลนี้ครอบคลุม และตัวอย่าง echo ที่รันได้จริงในหน้านี้'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+โมดูลก่อนหน้านี้อธิบายว่า WebSocket *คืออะไร* ส่วนโมดูลนี้พูดถึง **ออบเจกต์เพียงตัวเดียว** ที่เบราว์เซอร์มอบให้คุณใช้ขับเคลื่อนมัน นั่นคือคลาส `WebSocket` แบบ global มันเล็กอย่างน่าประหลาดใจ — มีเพียง constructor, สี่ event, หนึ่งฟิลด์สถานะ และสองเมธอด ก็ทำได้แทบทุกอย่างที่คุณจะต้องใช้
+
+## API ทั้งหมดบนหน้าจอเดียว
+
+ที่นี่ไม่มีเฟรมเวิร์กให้เรียนรู้ มีเพียงคลาส built-in เดียวเท่านั้น นี่คือมันทั้งหมดในแบบร่างคร่าว ๆ:
+
+```ts
+// Open a connection. This one line is the whole "setup".
+const ws = new WebSocket('wss://example.com/socket');
+
+// Four events — the only places your code reacts.
+ws.onopen = () => console.log('connected');
+ws.onmessage = (event) => console.log('got', event.data);
+ws.onerror = (event) => console.log('something went wrong');
+ws.onclose = (event) => console.log('closed', event.code);
+
+// One state field, and two methods.
+ws.readyState; // 0 CONNECTING, 1 OPEN, 2 CLOSING, 3 CLOSED
+ws.send('a message');
+ws.close();
+```
+
+เท่านั้นเอง ส่วนอื่น ๆ ทั้งหมดในโมดูลนี้ล้วนเป็นรายละเอียดและความละเอียดอ่อนที่วางซ้อนอยู่บนสมาชิกไม่กี่ตัวนั้น ถ้าคุณอ่านสนิปเป็ตด้านบนเข้าใจ คุณก็รู้รูปร่างของโปรแกรม WebSocket บนเบราว์เซอร์ทุกตัวแล้ว
+
+## วงจรชีวิตในรูปแบบ state machine
+
+การเชื่อมต่อไม่เคยมีแค่ "เปิด" หรือ "ปิด" มันเคลื่อนผ่านสี่สถานะที่แตกต่างกัน ในทิศทางเดียวเท่านั้น จาก `CONNECTING` ไปยัง `CLOSED` ไดอะแกรมด้านล่างคือแผนที่ที่คุณจะกลับมาดูอยู่เรื่อย ๆ:
+
+<Mermaid title="วงจรชีวิตของการเชื่อมต่อ WebSocket" code={lifecycleDiagram} />
+
+export const lifecycleDiagram = `stateDiagram-v2
+  [*] --> CONNECTING: new WebSocket(url)
+  CONNECTING --> OPEN: handshake succeeds (onopen)
+  CONNECTING --> CLOSED: handshake fails (onerror, onclose)
+  OPEN --> CLOSING: close() called or peer closes
+  CLOSING --> CLOSED: closing handshake done (onclose)
+  OPEN --> CLOSED: connection drops
+  CLOSED --> [*]`;
+
+อ่านมันเหมือนเรื่องเล่า: คุณสร้างออบเจกต์ขึ้นมาและมันอยู่ในสถานะ `CONNECTING` ถ้า handshake สำเร็จมันจะกลายเป็น `OPEN` และยิง `onopen` — นี่คือสถานะเดียวที่คุณส่งข้อมูลได้ เมื่อคุณหรือ peer ขอปิดการเชื่อมต่อ มันจะผ่านสถานะ `CLOSING` ชั่วครู่ แล้วลงตัวที่ `CLOSED` และยิง `onclose` การเชื่อมต่อไม่เคยเดินถอยหลัง socket ที่ปิดแล้วจะปิดตลอดไป และการเชื่อมต่อใหม่หมายถึงการสร้างออบเจกต์ตัวใหม่เอี่ยม
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+ห้าบทเรียนนี้พาเดินสำรวจ API ตามลำดับที่คุณจะได้เจอจริง ๆ:
+
+1. **The Client API (คุณอยู่ที่นี่)** — ภาพรวมของออบเจกต์และวงจรชีวิตของมัน
+2. **Creating a connection** — constructor, `ws://` กับ `wss://` และ subprotocol
+3. **Events and readyState** — สี่ event และสี่สถานะที่มันสะท้อนให้เห็น
+4. **Sending and receiving** — `send()`, message event, ลำดับการส่ง และคุณจะพูดได้เมื่อไหร่
+5. **Binary data** — text กับ binary, `binaryType` และการส่งไบต์
+
+## ดูวงจรชีวิตทำงานจริง
+
+เดโมด้านล่างใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง — `onopen`, `onmessage`, `send`, `close` ชุดเดียวกัน — จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ ในแอปจริงบรรทัดเดียวที่เปลี่ยนคือบรรทัดแรก `new WebSocket('wss://your-server')` กด **Run** แล้วดูการเชื่อมต่อเดียวเคลื่อนผ่านสถานะต่าง ๆ
+
+export const lifecycleEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  const names = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+        if (this.onmessage) this.onmessage({ data: 'connected — send me anything' });
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 2; setTimeout(() => { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  console.log('state after construct:', names[ws.readyState]);
+  ws.onopen = () => {
+    console.log('state on open:', names[ws.readyState]);
+    ws.send('hello');
+  };
+  ws.onmessage = (event) => {
+    console.log('received:', event.data);
+    ws.close();
+    console.log('state right after close():', names[ws.readyState]);
+  };
+  ws.onclose = (event) => console.log('state on close:', names[ws.readyState], '- code', event.code);
+})();`;
+
+<NodeRunner client:visible code={lifecycleEchoCode} />
+
+สังเกตว่าสถานะที่พิมพ์ออกมาเดินไปข้างหน้าเท่านั้น: `CONNECTING` แล้ว `OPEN` แล้ว `CLOSING` ทันทีที่เราเรียก `close()` และสุดท้าย `CLOSED` การเดินทางทางเดียวนี้คือหัวใจที่เต้นของโปรแกรม WebSocket ทุกตัว
+
+<Callout title="รูปร่างที่ต้องจำให้ขึ้นใจ">
+เบราว์เซอร์ให้คลาสมาหนึ่งตัว สร้างมันขึ้นมาเพื่อเริ่มที่ `CONNECTING`, ตอบสนองผ่านสี่ event, ตรวจ `readyState` เพื่อดูสี่สถานะ และเรียก `send()` / `close()` ทุกอย่างในโมดูลนี้แขวนอยู่บนสมาชิกไม่กี่ตัวนั้น
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'WebSocket บนเบราว์เซอร์เคลื่อนผ่านสถานะวงจรชีวิตที่แตกต่างกันกี่สถานะ?',
+    options: [
+      'สอง — open และ closed',
+      'สาม — connecting, open, closed',
+      'สี่ — connecting, open, closing, closed',
+      'ขึ้นอยู่กับเซิร์ฟเวอร์',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'WebSocket ส่งข้อความได้ในสถานะใด?',
+    options: [
+      'CONNECTING',
+      'OPEN',
+      'CLOSING',
+      'สถานะใดก็ได้เมื่อสร้างออบเจกต์แล้ว',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เกิดอะไรขึ้นหลังจากการเชื่อมต่อถึงสถานะ CLOSED?',
+    options: [
+      'มันกลับไปเป็น OPEN ได้ถ้า peer เชื่อมต่อใหม่',
+      'มันปิดอย่างถาวร การเชื่อมต่อใหม่หมายถึงออบเจกต์ WebSocket ตัวใหม่',
+      'มันลองเชื่อมต่อใหม่อัตโนมัติไปเรื่อย ๆ',
+      'มันย้อนกลับไปที่ CONNECTING',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="the-client-api/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="the-client-api/index" />

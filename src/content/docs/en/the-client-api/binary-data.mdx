@@ -1,0 +1,182 @@
+---
+title: 'Binary Data'
+description: 'Text vs binary frames, the binaryType setting, sending ArrayBuffer, Blob and TypedArrays, watching bufferedAmount, and a live ArrayBuffer echo demo.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+So far every message has been a string. But a WebSocket carries **bytes** just as happily — images, audio, protocol buffers, game state packed into a tight binary format. This final lesson covers the two flavors of frame, how the browser hands binary data back to you, and how to keep an eye on how much is waiting to go out.
+
+## Text versus binary frames
+
+At the protocol level, every WebSocket message is either a **text** frame or a **binary** frame:
+
+- A **text** frame carries UTF-8 encoded text. You produce one by passing a string to `send()`, and you receive it as a string.
+- A **binary** frame carries raw bytes with no encoding assumptions. You produce one by passing binary data to `send()`.
+
+The receiving side is told which kind a frame is, so there is never ambiguity between "the four-character string 1234" and "four raw bytes". You choose the flavor simply by what you pass to `send()`.
+
+## Sending binary
+
+`send()` accepts three binary inputs in addition to strings:
+
+```ts
+// An ArrayBuffer — a fixed-length block of raw bytes.
+const buffer = new ArrayBuffer(8);
+ws.send(buffer);
+
+// A TypedArray (or any ArrayBufferView) — a typed view over bytes.
+const bytes = new Uint8Array([1, 2, 3, 4]);
+ws.send(bytes);
+
+// A Blob — file-like binary data, e.g. straight from an <input type="file">.
+const blob = new Blob(['raw content']);
+ws.send(blob);
+```
+
+All three are sent as a single binary frame. `ArrayBuffer` and `TypedArray` are the usual choices when you are building a binary message in code; `Blob` shines when the data already exists as a file or came from a media API.
+
+## Receiving binary: binaryType
+
+Here is the one setting that matters for binary. When a binary frame arrives, what should `event.data` be — a `Blob` or an `ArrayBuffer`? You decide with `ws.binaryType`:
+
+```ts
+ws.binaryType = 'arraybuffer'; // event.data will be an ArrayBuffer
+// or
+ws.binaryType = 'blob';        // event.data will be a Blob (the default)
+```
+
+The default is `'blob'`. Set it to `'arraybuffer'` when you want to read the bytes immediately and synchronously — for example to wrap them in a `DataView` or `Uint8Array` and pull out fields. Reading a `Blob` is asynchronous, so for low-latency binary protocols `'arraybuffer'` is usually the better fit.
+
+```ts
+ws.binaryType = 'arraybuffer';
+ws.onmessage = (event) => {
+  if (typeof event.data === 'string') {
+    console.log('text frame:', event.data);
+  } else {
+    const view = new Uint8Array(event.data); // event.data is an ArrayBuffer
+    console.log('binary frame, first byte:', view[0]);
+  }
+};
+```
+
+Note how the same `onmessage` handler must branch on the type of `event.data`: a string for text frames, your chosen binary type for binary frames.
+
+## Watching bufferedAmount
+
+`send()` returns immediately, but the bytes are not always on the wire yet — if you send faster than the network drains, they pile up in an internal buffer. The read-only `ws.bufferedAmount` tells you how many bytes are still queued:
+
+```ts
+if (ws.bufferedAmount < 1_000_000) {
+  ws.send(nextChunk); // only push more if the buffer is not backing up
+}
+```
+
+This is your backpressure signal. When streaming large or frequent binary data, check `bufferedAmount` before sending more; if it keeps climbing, you are producing faster than the connection can carry, and blindly calling `send()` will bloat memory.
+
+<Mermaid title="Choosing a frame type when you send" code={binaryDiagram} />
+
+export const binaryDiagram = `flowchart TD
+  A["You call ws.send(payload)"] --> B{"What did you pass?"}
+  B -- "string" --> T["Text frame (UTF-8)"]
+  B -- "ArrayBuffer / TypedArray / Blob" --> N["Binary frame (raw bytes)"]
+  N --> C{"ws.binaryType on the receiver"}
+  C -- "'arraybuffer'" --> AB["event.data is an ArrayBuffer"]
+  C -- "'blob'" --> BL["event.data is a Blob"]`;
+
+## Echo an ArrayBuffer, live
+
+The demo uses an in-page echo socket with the real `WebSocket` API, so it runs anywhere with no server. It sets `binaryType` to `'arraybuffer'`, sends a small `Uint8Array`, and reads the echoed bytes straight back out. In a real app only the first line — `new WebSocket('wss://your-server')` — would change.
+
+export const binaryEchoCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      this.binaryType = 'blob';
+      this.bufferedAmount = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) {
+      // Echo back respecting binaryType, like a real binary echo server would.
+      let out = data;
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+        const buf = data instanceof ArrayBuffer ? data : data.buffer;
+        out = this.binaryType === 'arraybuffer' ? buf : new Blob([buf]);
+      }
+      setTimeout(() => { if (this.onmessage) this.onmessage({ data: out }); }, 50);
+    }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  ws.binaryType = 'arraybuffer'; // we want raw bytes back, not a Blob
+  ws.onopen = () => {
+    const payload = new Uint8Array([10, 20, 30, 40]);
+    console.log('sending bytes:', Array.from(payload).join(', '));
+    ws.send(payload);
+    console.log('bufferedAmount right after send:', ws.bufferedAmount);
+  };
+  ws.onmessage = (event) => {
+    const isBinary = event.data instanceof ArrayBuffer;
+    console.log('frame type:', isBinary ? 'binary (ArrayBuffer)' : 'text');
+    if (isBinary) {
+      const view = new Uint8Array(event.data);
+      console.log('received bytes:', Array.from(view).join(', '));
+    }
+    ws.close();
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={binaryEchoCode} />
+
+The four bytes go out as a binary frame and come back as an `ArrayBuffer` — because we set `binaryType = 'arraybuffer'` — which we then read through a `Uint8Array`. Had we left `binaryType` at its `'blob'` default, `event.data` would have been a `Blob` to read asynchronously instead.
+
+<Callout title="Binary in one breath">
+Pass a string for a text frame, or an `ArrayBuffer` / `TypedArray` / `Blob` for a binary frame. On receive, set `ws.binaryType` to `'arraybuffer'` (sync, byte-level reads) or `'blob'` (the default), and branch in `onmessage` on the type of `event.data`. When streaming, throttle on `ws.bufferedAmount` so the outbound buffer never runs away.
+</Callout>
+
+export const quizBinary = [
+  {
+    q: 'Which value of ws.binaryType makes event.data an ArrayBuffer?',
+    options: [
+      "'blob'",
+      "'arraybuffer'",
+      "'buffer'",
+      "'bytes'",
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which of these can you NOT pass to ws.send()?',
+    options: [
+      'A string',
+      'An ArrayBuffer',
+      'A plain JavaScript object (not serialized)',
+      'A Blob',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What does ws.bufferedAmount tell you?',
+    options: [
+      'How many messages the server has acknowledged',
+      'How many bytes are still queued and not yet sent',
+      'The total bytes received so far',
+      'The maximum frame size allowed',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="the-client-api/binary-data" questions={quizBinary} />
+
+<ProgressTracker client:visible id="the-client-api/binary-data" />

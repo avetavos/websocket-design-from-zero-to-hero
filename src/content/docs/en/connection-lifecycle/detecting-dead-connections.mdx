@@ -1,0 +1,164 @@
+---
+title: 'Detecting Dead Connections'
+description: 'Turning missed pongs into a confident "this is dead" — timeouts, half-open connections, terminating cleanly, and a live demo that flags a missing pong.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The heartbeat from the last lesson sends a pulse. But a pulse you send is worthless unless you *check the answer comes back*. This lesson is about that check: how to turn "the pong did not arrive" into a confident decision to declare the connection dead and tear it down.
+
+## Sending is half; expecting is the other half
+
+A common, broken first attempt is to send a ping on a timer and stop there. That detects nothing. The whole detection happens in the **gap between the ping you sent and the pong you expected**. The logic is:
+
+1. Send a ping. Note that a pong is now *owed* to you.
+2. Start a deadline — say, the next interval or a few seconds.
+3. If the matching pong arrives before the deadline, good: clear the debt, the connection is alive.
+4. If the deadline passes with the debt still outstanding, you have a **missed pong**. Treat the connection as dead.
+
+The single most useful variable in your client is therefore something like `pongOutstanding` (or a count of unanswered pings). When it crosses a threshold, you act. Many production clients tolerate one or two misses before declaring death — a single missed pong might be a momentary hiccup; three in a row is a corpse.
+
+## Half-open connections — the reason this is hard
+
+The villain behind all this is the **half-open** connection. A connection is half-open when one side believes it is still connected while the other has silently vanished. Picture a phone call where the other person's phone died mid-sentence: you are still holding the receiver, talking, hearing nothing, with no dial tone to tell you the call is over.
+
+This happens constantly in real networks:
+
+- A laptop lid closes; the OS freezes the socket without a clean close.
+- A mobile device switches from Wi-Fi to cellular, abandoning the old socket.
+- A NAT or load balancer silently evicts an idle connection from its table.
+
+In every case, **no `close` event fires** on the surviving side, because no FIN packet ever reached it. Your `WebSocket` still says OPEN. The *only* way you will ever learn the truth is by sending something and noticing nothing came back — which is exactly what the heartbeat-plus-deadline gives you.
+
+## From missed pong to termination
+
+Once you have decided the connection is dead, do not be polite about it. A clean `close()` tries to perform a handshake with a peer that is *already gone* — there is nobody to handshake with, so it may hang. Instead, **terminate**: abandon the dead socket immediately and move straight to reconnecting. Browsers expose `close()`; Node's `ws` library adds `terminate()` for exactly this brutal case. The decision flow:
+
+<Mermaid title="Deciding a connection is dead" code={detectDiagram} />
+
+export const detectDiagram = `stateDiagram-v2
+  [*] --> Healthy
+  Healthy --> Waiting: send ping, pong now owed
+  Waiting --> Healthy: pong arrived in time
+  Waiting --> Suspect: deadline passed, pong missed
+  Suspect --> Healthy: a later pong arrived
+  Suspect --> Dead: misses exceeded threshold
+  Dead --> Terminate: abandon socket, do not handshake
+  Terminate --> [*]: hand off to reconnect`;
+
+## Watch a missed pong get flagged
+
+The demo below uses an in-page socket with the real `WebSocket` API. This mock answers the first couple of pings normally — then it goes silent, simulating a connection that has died without firing `onclose` (a half-open connection). The client runs a heartbeat with a deadline and flags the connection dead the moment a pong is overdue.
+
+export const deadDetectCode = `(function () {
+  // In-page socket with the real WebSocket API. This mock answers the first
+  // two pings, then goes SILENT to imitate a half-open connection: the socket
+  // still says OPEN but no pong ever returns and no onclose ever fires.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  class FlakySocket {
+    constructor() {
+      this.readyState = 0;
+      this.answered = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 30);
+    }
+    send(data) {
+      const msg = JSON.parse(data);
+      if (msg.type !== 'ping') return;
+      this.answered += 1;
+      if (this.answered <= 2) {
+        setTimeout(() => {
+          if (this.onmessage) this.onmessage({ data: JSON.stringify({ type: 'pong', seq: msg.seq }) });
+        }, 30);
+      }
+      // 3rd ping onward: silence. No pong, no close. The connection is a corpse.
+    }
+    close(code) { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000 }); }
+    terminate() { this.readyState = 3; /* no handshake — just gone */ }
+  }
+
+  const PING_MS = 600;
+  const ws = new FlakySocket();
+  let seq = 0;
+  let pongOutstanding = 0;
+  let timer = null;
+
+  ws.onopen = () => {
+    console.log('open — heartbeat with deadline started');
+    timer = setInterval(() => {
+      if (pongOutstanding >= 1) {
+        console.log('!! missed pong — pongs outstanding: ' + pongOutstanding);
+        if (pongOutstanding >= 2) {
+          console.log('connection declared DEAD — terminating (no clean handshake)');
+          clearInterval(timer);
+          ws.terminate();
+          console.log('socket abandoned — hand off to reconnect logic');
+          return;
+        }
+      }
+      seq += 1;
+      pongOutstanding += 1;
+      console.log('-> ping #' + seq + ' (pong now owed)');
+      ws.send(JSON.stringify({ type: 'ping', seq: seq }));
+    }, PING_MS);
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'pong') {
+      pongOutstanding = Math.max(0, pongOutstanding - 1);
+      console.log('<- pong #' + msg.seq + ' — debt cleared, connection healthy');
+    }
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={deadDetectCode} />
+
+You will see two healthy ping/pong pairs, then the mock falls silent. The client keeps sending, the unanswered-pong count climbs, and once it crosses the threshold the client declares the connection dead and *terminates* it — without ever waiting for an `onclose` that was never going to come. That is detection: you stopped trusting silence and acted on the missing answer.
+
+<Callout title="Detection in one line">
+A connection is dead when an owed pong does not arrive before its deadline. Count the misses, cross a small threshold, then **terminate** rather than politely close — because a half-open peer is already gone and there is no one left to handshake with.
+</Callout>
+
+export const quizDetect = [
+  {
+    q: 'What actually detects a dead connection?',
+    options: [
+      'Sending a ping on a timer is enough by itself',
+      'The gap between a ping sent and a pong that never arrives before its deadline',
+      'Waiting for the browser onclose event, which always fires',
+      'Reading the readyState property once at startup',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is a half-open connection?',
+    options: [
+      'A connection that is only encrypted in one direction',
+      'One side believes it is connected while the other has silently vanished, with no close event firing',
+      'A connection still in the handshake phase',
+      'A connection limited to half the normal bandwidth',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why terminate instead of cleanly close a connection you have declared dead?',
+    options: [
+      'Terminating is encrypted and closing is not',
+      'A clean close tries to handshake with a peer that is already gone and may hang, so you abandon the socket instead',
+      'The protocol forbids closing dead connections',
+      'There is no difference between the two',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/detecting-dead-connections" questions={quizDetect} />
+
+<ProgressTracker client:visible id="connection-lifecycle/detecting-dead-connections" />

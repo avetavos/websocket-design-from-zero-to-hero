@@ -1,0 +1,141 @@
+---
+title: 'TLS and DoS'
+description: 'Always wss/TLS, per-IP connection limits, slowloris and handshake floods, authenticating before allocating resources, and idle timeouts.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The previous lessons defended *individual messages on a connection*. This last lesson zooms out to the connection layer itself: the bytes on the wire, and the danger of letting too many connections — or too many half-finished ones — pile up. Two themes run through it: **encrypt everything** with TLS, and **never spend a resource before you know the connection is worth it**.
+
+## Always `wss` — TLS is non-negotiable
+
+A WebSocket inherits its security from the scheme it opens on. `ws://` is plaintext: the handshake, your auth token, and every frame travel as cleartext that any router, proxy, or coffee-shop Wi-Fi peer between client and server can read or rewrite. `wss://` wraps the whole thing in TLS, exactly as `https://` does for HTTP. The rules are simple and absolute:
+
+- Use **`wss://`** in production, always. Terminate TLS at your load balancer or directly in the server.
+- A page served over **`https://` cannot open a `ws://` connection** — browsers block it as mixed content. So once your site is on HTTPS (it is), `wss` is the only option that works anyway.
+- Treat `ws://` as a localhost-only development affordance and nothing more.
+
+```ts
+// Production: TLS-terminated WebSocket server.
+import { createServer } from 'node:https';
+import { readFileSync } from 'node:fs';
+import { WebSocketServer } from 'ws';
+
+const server = createServer({
+  cert: readFileSync('/etc/tls/fullchain.pem'),
+  key: readFileSync('/etc/tls/privkey.pem'),
+});
+// maxPayload caps frame size at the protocol level (see the previous lesson).
+const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
+server.listen(443);
+```
+
+## Connection-level denial of service
+
+Rate limiting bounded messages *within* a connection. But an attacker can also attack you with the connections *themselves*:
+
+- **Connection floods.** Open thousands of sockets from one or a few IPs. Each open socket costs memory and a file descriptor; enough of them exhaust the server before a single message is sent.
+- **Slowloris / slow handshakes.** Start the HTTP upgrade but send the request bytes one trickle at a time, or never finish. A server that holds the connection open waiting consumes a slot per attacker for free. The defence is a **handshake timeout**: if the upgrade does not complete within a few seconds, drop it.
+- **Idle hoarding.** Open a socket, authenticate, then go silent forever — tying up resources while doing nothing. A **heartbeat plus idle timeout** reclaims these: ping periodically, and close any connection that fails to pong or sends nothing for too long.
+
+<Mermaid title="Bounding connections: limit, time out the handshake, authenticate before allocating" code={dosDiagram} />
+
+export const dosDiagram = `flowchart TB
+  N["New TCP / upgrade attempt"] --> IP{"Connections from<br/>this IP < limit?"}
+  IP -- "no" --> R1["Refuse — protect capacity"]
+  IP -- "yes" --> HT{"Handshake completes<br/>within timeout?"}
+  HT -- "no (slowloris)" --> R2["Drop — reclaim slot"]
+  HT -- "yes" --> AU{"Authenticated?"}
+  AU -- "no" --> R3["Close 1008 — before allocating state"]
+  AU -- "yes" --> AL["Allocate per-connection state<br/>+ start heartbeat / idle timeout"]`;
+
+## Authenticate before you allocate
+
+The single most important principle here is **ordering**. Do the cheap rejections first and spend resources last. An unauthenticated or wrong-origin connection should be closed *before* you allocate its session object, register it in your rooms, subscribe it to your pub/sub backend, or buffer anything for it. If you allocate first and check later, every rejected attacker still cost you the full setup — which is precisely the resource exhaustion you are trying to prevent. The pipeline is always: **IP/connection limit → handshake timeout → origin check → authenticate → only now allocate state.**
+
+## Per-IP limits and idle timeouts in practice
+
+The sketch below shows the connection-handler shape: a per-IP counter that refuses excess connections, immediate cleanup of that counter on close, and a heartbeat-driven idle timeout that closes dead sockets. This is `ts` rather than a runnable demo because it depends on a live network and real clock — but it drops directly into a `ws` server.
+
+```ts
+const MAX_PER_IP = 20;
+const perIp = new Map<string, number>();
+
+wss.on('connection', (ws, req) => {
+  const ip = req.socket.remoteAddress ?? 'unknown';
+
+  // 1. Per-IP connection limit — refuse BEFORE allocating anything.
+  const count = perIp.get(ip) ?? 0;
+  if (count >= MAX_PER_IP) {
+    ws.close(1008, 'too many connections');
+    return;
+  }
+  perIp.set(ip, count + 1);
+
+  // 2. (origin + auth checks happen here — see earlier lessons)
+
+  // 3. Heartbeat + idle timeout: reclaim dead/silent sockets.
+  let alive = true;
+  ws.on('pong', () => { alive = true; });
+  const beat = setInterval(() => {
+    if (!alive) { ws.terminate(); return; } // no pong since last beat → kill
+    alive = false;
+    ws.ping();
+  }, 30_000);
+
+  // 4. Always clean up on close — release the IP slot and the timer.
+  ws.on('close', () => {
+    clearInterval(beat);
+    perIp.set(ip, (perIp.get(ip) ?? 1) - 1);
+  });
+});
+```
+
+The handshake timeout itself lives one level up, on the HTTP server (`server.headersTimeout` / `server.requestTimeout`), so a slowloris upgrade is dropped before it ever reaches this handler. Together these bound *how many* connections exist, *how long* an unfinished one may linger, and *how long* an idle one survives — closing the last gaps an attacker could exploit.
+
+<Callout title="Encrypt everything; reject cheaply, allocate late">
+Run only on **`wss`/TLS**. Bound connections, not just messages: **limit connections per IP**, **time out slow/unfinished handshakes** (slowloris), and use a **heartbeat with an idle timeout** to reclaim dead sockets. Above all, **authenticate before you allocate** — every per-connection resource should be spent only after the origin and credential have passed, so a rejected attacker costs you almost nothing.
+</Callout>
+
+export const quizTls = [
+  {
+    q: 'Why must production WebSockets use wss:// rather than ws://?',
+    options: [
+      'wss is faster than ws',
+      'ws sends the handshake, token, and frames as cleartext, and https pages are blocked from opening ws connections as mixed content',
+      'ws does not support binary frames',
+      'wss disables the same-origin policy',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What defends against a slowloris-style slow handshake attack?',
+    options: [
+      'A larger maxPayload',
+      'A handshake/request timeout that drops upgrades that do not complete in time',
+      'Disabling TLS',
+      'Authorizing every message',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the correct ordering to avoid wasting resources on bad connections?',
+    options: [
+      'Allocate the session first, then check origin and auth',
+      'Limit per IP, time out the handshake, check origin, authenticate — and only then allocate per-connection state',
+      'Authenticate only after the first message is processed',
+      'Allocate state for every connection and clean up later',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="security/tls-and-dos" questions={quizTls} />
+
+<ProgressTracker client:visible id="security/tls-and-dos" />

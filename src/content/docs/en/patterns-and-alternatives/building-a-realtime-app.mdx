@@ -1,0 +1,182 @@
+---
+title: 'Building a Real-Time App'
+description: 'Tie it together — a small chat/notifications service with rooms, heartbeats, auth, and reconnect, running on a real Node ws server.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+This is the capstone. Every earlier module added one capability; here we assemble them into a single, small, real-time service — a room-based chat with notifications — and run it on a genuine Node `ws` server. The goal is not new theory. It is to watch the pieces you already know snap together into something that actually holds up: **auth** on connect, **rooms** for routing, **heartbeats** to detect dead links, and a wire shape that survives **reconnect**.
+
+## The design at a glance
+
+A real-time service is a pipeline that each connection flows through. When a socket arrives we authenticate it, attach per-connection state, let it join rooms, route its messages, and keep it alive with heartbeats until it leaves:
+
+<Mermaid title="The lifecycle of one connection in the service" code={appDiagram} />
+
+export const appDiagram = `flowchart TD
+  open["Client connects<br/>(token in query / first message)"] --> auth{"Token valid?"}
+  auth -- "No" --> reject["close(4401)<br/>unauthorized"]
+  auth -- "Yes" --> attach["Attach state:<br/>userId, rooms, isAlive"]
+  attach --> ready["Send 'ready'<br/>client can subscribe"]
+  ready --> route["Route messages:<br/>join / leave / chat"]
+  route --> beat["Heartbeat:<br/>ping every 30s, expect pong"]
+  beat -- "no pong" --> dead["terminate dead socket"]
+  route -- "client gone" --> clean["close -> leave all rooms"]`;
+
+Each box maps to a module you have already done: auth is [security](/websocket-design-from-zero-to-hero/en/security/), per-connection state and rooms are [server design](/websocket-design-from-zero-to-hero/en/server-design/), heartbeats are the [connection lifecycle](/websocket-design-from-zero-to-hero/en/connection-lifecycle/), and the message envelope is [message design](/websocket-design-from-zero-to-hero/en/message-design/). The capstone is just the wiring.
+
+## The four ingredients
+
+- **Auth on connect.** Reject unauthenticated sockets immediately with a custom close code so the client knows not to blindly retry. Here we read a simple token from the upgrade request URL; in production it would be a verified session or JWT (see the [security module](/websocket-design-from-zero-to-hero/en/security/)).
+- **Rooms.** Each connection carries a `Set` of rooms it has joined. A chat message is delivered only to other sockets in the same room — the [pub/sub pattern](/websocket-design-from-zero-to-hero/en/patterns-and-alternatives/pubsub-and-rooms/) from earlier in this module, scoped to a group.
+- **Heartbeats.** TCP can go silent without an error event — a laptop sleeps, a phone loses signal. A periodic `ping` with an expected `pong` is how the server learns a connection is actually dead and reclaims it, instead of broadcasting forever into a void.
+- **Reconnect-friendliness.** The server cannot reconnect for the client, but it can make reconnection cheap: a clean, idempotent `join` so a returning client just re-announces its rooms, and stable close codes so the client knows whether to retry (transient) or stop (auth failure).
+
+## The wire protocol
+
+Keep it boringly explicit — a `type` tag and the fields each type needs:
+
+```ts
+// client -> server
+type ClientMessage =
+  | { type: 'join'; room: string }
+  | { type: 'leave'; room: string }
+  | { type: 'chat'; room: string; text: string };
+
+// server -> client
+type ServerMessage =
+  | { type: 'ready'; userId: string }
+  | { type: 'joined'; room: string }
+  | { type: 'chat'; room: string; from: string; text: string }
+  | { type: 'error'; message: string };
+```
+
+## Run the real server
+
+Below is the **body of the connection handler** for a real `ws` server — `ws` (this socket), `wss` (the server, for room broadcast), and `req` (the upgrade request) are already in scope. It authenticates from a `?token=` query parameter, attaches per-connection state, handles join/leave/chat with room-scoped broadcast, and runs a per-socket heartbeat. Open it in StackBlitz, run `npm start`, then connect a client (add `?token=alice` to the URL) and watch a join, a room-scoped chat, and the heartbeat in the server log.
+
+export const serverCode = `// Body of wss.on('connection', (ws, req) => { ... }). ws/wss/req in scope.
+
+// --- 1. Auth: read a token from the upgrade URL. Reject if missing. ---
+const url = new URL(req.url || '/', 'http://localhost');
+const token = url.searchParams.get('token');
+if (!token) {
+  ws.send(JSON.stringify({ type: 'error', message: 'missing token' }));
+  ws.close(4401, 'unauthorized'); // 4401 = our app-level "auth failed"
+  return;
+}
+const userId = token; // in production: verify a JWT / session here
+
+// --- 2. Per-connection state ---
+const state = { userId, rooms: new Set(), isAlive: true };
+
+// --- 3. Heartbeat: ping every 30s; terminate if no pong came back ---
+ws.on('pong', () => { state.isAlive = true; });
+const heartbeat = setInterval(() => {
+  if (!state.isAlive) {
+    console.log(userId, 'missed heartbeat — terminating');
+    clearInterval(heartbeat);
+    return ws.terminate();
+  }
+  state.isAlive = false;
+  ws.ping();
+}, 30000);
+
+// Room-scoped broadcast: deliver to every OTHER client in the room.
+function broadcastToRoom(room, payload) {
+  for (const client of wss.clients) {
+    const cs = client.appState;
+    if (client !== ws && cs && cs.rooms.has(room) && client.readyState === 1) {
+      client.send(JSON.stringify(payload));
+    }
+  }
+}
+ws.appState = state; // expose state so peers can be matched by room
+
+ws.send(JSON.stringify({ type: 'ready', userId }));
+console.log(userId, 'authenticated and ready');
+
+// --- 4. Route messages ---
+ws.on('message', (raw) => {
+  let msg;
+  try { msg = JSON.parse(raw.toString()); }
+  catch { return ws.send(JSON.stringify({ type: 'error', message: 'bad JSON' })); }
+
+  if (msg.type === 'join') {
+    state.rooms.add(msg.room);
+    ws.send(JSON.stringify({ type: 'joined', room: msg.room }));
+    console.log(userId, 'joined', msg.room);
+  } else if (msg.type === 'leave') {
+    state.rooms.delete(msg.room);
+  } else if (msg.type === 'chat') {
+    if (!state.rooms.has(msg.room)) {
+      return ws.send(JSON.stringify({ type: 'error', message: 'join the room first' }));
+    }
+    broadcastToRoom(msg.room, { type: 'chat', room: msg.room, from: userId, text: msg.text });
+    console.log(userId, '-> ' + msg.room + ':', msg.text);
+  } else {
+    ws.send(JSON.stringify({ type: 'error', message: 'unknown type' }));
+  }
+});
+
+// --- 5. Cleanup: stop the heartbeat and drop the rooms ---
+ws.on('close', () => {
+  clearInterval(heartbeat);
+  state.rooms.clear();
+  console.log(userId, 'disconnected');
+});`;
+
+<NodeRunner node client:visible code={serverCode} />
+
+To exercise rooms properly, connect two clients with different tokens (e.g. `?token=alice` and `?token=bob`), have both `join` the same room, and watch a `chat` from one appear on the other but never echo back to the sender. Disconnect one and the server's `close` handler clears its rooms — no ghost membership left behind.
+
+## What you have built
+
+Step back and notice what this small file is: a complete, defensible real-time service. It refuses anonymous sockets, routes by room instead of blasting everyone, survives clients that vanish without a `close`, and speaks a typed protocol a reconnecting client can resume against. Every one of those properties came from a separate module — and assembling them is exactly the skill this course set out to teach. From here, scaling it across instances is the [pub/sub fan-out](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/) you already met; everything else is product.
+
+<Callout title="The capstone in one line">
+A production-shaped real-time service is **auth on connect**, **rooms** for routing, **heartbeats** to detect dead links, and a **typed, reconnect-friendly protocol** — each a module you have already done, wired together over one `ws` server.
+</Callout>
+
+export const quizApp = [
+  {
+    q: 'Why does the server reject an unauthenticated socket with a specific close code like 4401?',
+    options: [
+      'To compress the connection',
+      'So the client can tell an auth failure (do not retry) from a transient drop (do retry)',
+      'Because ws requires a numeric reason',
+      'To force the client to use SSE instead',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What problem do heartbeats solve in this service?',
+    options: [
+      'They encrypt each message',
+      'They detect connections that have gone silent without a close event, so the server can reclaim them',
+      'They guarantee message ordering',
+      'They reconnect the client automatically',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How is a chat message routed in the demo server?',
+    options: [
+      'Broadcast to every connected client',
+      'Delivered only to other clients that have joined the same room',
+      'Sent back only to the sender',
+      'Stored in a database and never forwarded',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="patterns-and-alternatives/building-a-realtime-app" questions={quizApp} />
+
+<ProgressTracker client:visible id="patterns-and-alternatives/building-a-realtime-app" />

@@ -1,0 +1,161 @@
+---
+title: 'Request/Response over WebSocket'
+description: 'WebSocket เน้น message ไม่ใช่ request/response เพิ่ม correlation id เพื่อให้จับคู่ reply กับ request ของมันได้ เดโมสดของชั้น request/reply เล็ก ๆ บน socket ภายในหน้า'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+นักพัฒนาที่มาจาก HTTP แบกข้อสมมติที่ฝังลึกมาด้วย: *ฉันเรียกเอง response นี้ก็เลยเป็นของฉัน* ด้วย `fetch` คำตอบที่คุณ `await` คือคำตอบของคำถามที่คุณถามอย่างไม่กำกวม WebSocket ถอดการรับประกันนั้นออกไปเงียบ ๆ — และการได้มันคืนมาคือหนึ่งในแพตเทิร์นที่มีประโยชน์ที่สุดในการออกแบบ message
+
+## socket เน้น message ไม่ใช่ request/reply
+
+WebSocket ไม่มีแนวคิดของ request ที่จับคู่กับ response มีเพียงสตรีมของ message ที่ไหลไปแต่ละทิศทาง *อย่างเป็นอิสระ* เมื่อ `onmessage` ทำงาน message นั้นอาจเป็น:
+
+- reply ของสิ่งที่คุณเพิ่งถาม,
+- reply ของสิ่งที่คุณถามไปสาม message ก่อนหน้าซึ่งใช้เวลานานกว่า,
+- หรือ server push ที่ไม่ได้ร้องขอเลย (chat line ใหม่, price tick)
+
+ถ้าคุณยิง request "fetch user" ออกไปสามครั้งและผลลัพธ์กลับมาสามอัน **ไม่มีอะไรใน transport บอกคุณว่าผลลัพธ์ไหนตอบ request ไหน** reply อาจมาถึงผิดลำดับ สลับกับ push คุณพึ่งพาลำดับไม่ได้ และคุณ `await` `send` ไม่ได้แน่นอน
+
+## correlation id ผูก reply เข้ากับ request ของมัน
+
+วิธีแก้คือ field เดียวที่คุณรู้วิธีเพิ่มอยู่แล้ว: **`id`** ที่ไม่ซ้ำกันบนแต่ละ request ซึ่ง server **สะท้อนกลับ (echoes)** บน reply ที่จับคู่กัน client เก็บตารางเล็ก ๆ ของ *id → "ใครกำลังรออันนี้"* และเมื่อ reply มาถึง มันค้นหา id, resolve ผู้รอนั้น แล้วลบ entry ออก reply ของ id ที่ไม่รู้จัก (หรือ message ที่ไม่มี id เลย) ถูกถือว่าเป็น server push
+
+<Mermaid title="การจับคู่ reply เข้ากับ request ด้วย id ที่สะท้อนกลับ" code={correlationDiagram} />
+
+export const correlationDiagram = `sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: { type: 'getUser', id: 'r1', name: 'alice' }
+  C->>S: { type: 'getUser', id: 'r2', name: 'bob' }
+  Note over S: replies may come back in any order
+  S-->>C: { type: 'reply', id: 'r2', age: 41 }
+  C->>C: look up r2, resolve bob's waiter
+  S-->>C: { type: 'reply', id: 'r1', age: 30 }
+  C->>C: look up r1, resolve alice's waiter`;
+
+นี่คือวิธีที่ request/response *รู้สึก* เหมือน HTTP อีกครั้งพอดี — แต่สร้างด้วยมือ บนสตรีม ด้วย correlation field เดียว การห่อมันใน promise ทำให้จุดที่เรียกอ่านเหมือน `await` ธรรมดา
+
+## ชั้น request/reply เล็ก ๆ แบบสด ๆ
+
+เดโมด้านล่างทำ `request()` บน echo socket ภายในหน้า แต่ละครั้งที่เรียกจะสร้าง `id` ใหม่ เก็บ resolver ไว้ใน map `pending` แล้วส่ง request เมื่อ reply กลับมา `id` ที่สะท้อนกลับของมันจะหา resolver ที่ถูกต้องเจอ request สองอันถูกส่งออกไป echo หน่วงเวลาต่างกันเพื่อให้ **reply มาถึงผิดลำดับ** — และ correlation ยังคงจับคู่แต่ละอันได้อย่างถูกต้อง มันใช้ `WebSocket` API จริง
+
+export const reqReplyCode = `(function () {
+  // In-page echo socket with the real WebSocket API. It replies to a 'getUser' request,
+  // echoing the request id, with a small random delay so replies can arrive out of order.
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) {
+      const req = JSON.parse(data);
+      const ages = { alice: 30, bob: 41 };
+      const delay = req.name === 'alice' ? 120 : 30; // alice answers SLOWER than bob
+      setTimeout(() => {
+        if (this.onmessage) {
+          const reply = { type: 'reply', id: req.id, name: req.name, age: ages[req.name] };
+          this.onmessage({ data: JSON.stringify(reply) });
+        }
+      }, delay);
+    }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  const pending = {};      // id -> resolver function
+  let nextId = 0;
+  let answered = 0;
+
+  // request() returns a promise that resolves when the reply with our id arrives.
+  function request(payload) {
+    return new Promise((resolve) => {
+      const id = 'r' + (++nextId);
+      pending[id] = resolve;
+      ws.send(JSON.stringify(Object.assign({ id: id }, payload)));
+    });
+  }
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    const resolve = pending[msg.id];
+    if (resolve) {
+      delete pending[msg.id];   // one-time use
+      resolve(msg);
+    } else {
+      console.log('unsolicited server push:', msg.type); // no matching id = a push
+    }
+  };
+
+  function done() {
+    answered += 1;
+    if (answered === 2) ws.close();
+  }
+
+  ws.onopen = () => {
+    console.log('asking for alice (slow) and bob (fast)...');
+    request({ type: 'getUser', name: 'alice' }).then((r) => {
+      console.log('alice resolved correctly, age', r.age, '(id ' + r.id + ')');
+      done();
+    });
+    request({ type: 'getUser', name: 'bob' }).then((r) => {
+      console.log('bob resolved correctly, age', r.age, '(id ' + r.id + ')');
+      done();
+    });
+  };
+
+  ws.onclose = () => console.log('both promises resolved to the RIGHT user despite out-of-order replies');
+})();`;
+
+<NodeRunner client:visible code={reqReplyCode} />
+
+ดูลำดับให้ดี: reply ของ bob กลับมาก่อนเพราะ server ตอบเขาเร็วกว่า แต่ promise ของ alice ยังคง resolve เป็น alice และของ bob เป็น bob `id` — ไม่ใช่ลำดับการมาถึง — คือสิ่งที่ทำให้การจับคู่ถูกต้อง map `pending` เล็ก ๆ นั้นคือกลเม็ดทั้งหมดเบื้องหลังทุก library "RPC over WebSocket" ที่คุณจะได้ใช้
+
+ส่วนขัดเกลาสองสามอย่างที่คุณจะเพิ่มใน production: **timeout** ที่ reject entry ที่รออยู่หากไม่มี reply มาถึง และการเคลียร์ map `pending` หาก socket ปิด เพื่อไม่ให้ promise ค้างอยู่ตลอดกาล
+
+<Callout title="ใจความสำคัญในหนึ่งบรรทัด">
+WebSocket ไม่มี request/response ในตัว — reply และ push ใช้สตรีมเดียวร่วมกันและมาถึงผิดลำดับได้ ใส่ **`id`** ที่ไม่ซ้ำบนแต่ละ request ให้ server **สะท้อนมันกลับ** บน reply และเก็บ map *id → ผู้รอ* เพื่อให้ทุกคำตอบหาคำถามที่ถามมันได้
+</Callout>
+
+export const quizReqReply = [
+  {
+    q: 'ทำไมคุณจึงพึ่งพาลำดับการมาถึงเพื่อจับคู่ WebSocket reply กับ request ไม่ได้?',
+    options: [
+      'transport รับประกันลำดับที่เข้มงวด ดังนั้นลำดับจึงเชื่อถือได้',
+      'reply มาถึงผิดลำดับได้และสลับกับ server push ที่ไม่ได้ร้องขอ',
+      'WebSocket ทิ้งทุก message ที่สอง',
+      'fetch จัดการ correlation ของ WebSocket ให้คุณอยู่แล้ว',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'แพตเทิร์น correlation-id จับคู่ reply กับ request ของมันอย่างไร?',
+    options: [
+      'client สมมติว่า reply แรกตอบ request แรก',
+      'แต่ละ request พก id ที่ไม่ซ้ำซึ่ง server สะท้อนกลับบน reply client ค้นหามันใน map pending',
+      'server เรียงลำดับ reply ตามตัวอักษร',
+      'WebSocket URL เปลี่ยนต่อแต่ละ request',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในเดโม ทำไม alice จึงยัง resolve เป็น alice แม้ว่า bob จะ reply ก่อน?',
+    options: [
+      'promise resolve ตามลำดับการสร้างเสมอ',
+      'id ที่สะท้อนกลับ ไม่ใช่ลำดับการมาถึง คือสิ่งที่เลือก resolver ที่รออยู่ได้ถูกต้อง',
+      'echo socket เรียงลำดับ reply ก่อนส่ง',
+      'request ทั้งสองใช้ id เดียวร่วมกัน',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/request-response-over-ws" questions={quizReqReply} />
+
+<ProgressTracker client:visible id="message-design/request-response-over-ws" />

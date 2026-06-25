@@ -1,0 +1,186 @@
+---
+title: 'Close Codes & Resume'
+description: 'The close handshake, what close codes mean (1000, 1001, 1006, 1011, app codes 4000+), clean shutdown, and replaying missed state on reconnect with a last-seen id.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+We have covered the accidental end of a connection — drops, detection, reconnect. This final lesson covers the *deliberate* end: the clean close handshake, the numeric codes that explain why a connection ended, and the payoff of doing reconnection well — catching up on everything you missed while you were gone.
+
+## The close handshake
+
+A clean WebSocket close is a small two-step conversation, not a yank of the cable:
+
+1. One side sends a **close frame** carrying a numeric code and an optional short reason string.
+2. The other side replies with its own close frame.
+3. Only then is the underlying TCP connection torn down.
+
+This is why the foundations module insisted a WebSocket close is symmetric. When it works, both ends agree the connection is over and nobody is left guessing. The browser surfaces this through the `onclose` event, whose `event` carries `code`, `reason`, and a `wasClean` flag telling you whether the full handshake completed.
+
+<Mermaid title="The clean close handshake" code={closeDiagram} />
+
+export const closeDiagram = `sequenceDiagram
+  participant A as Side A
+  participant B as Side B
+  A->>B: close frame (code, reason)
+  B-->>A: close frame (echo)
+  Note over A,B: TCP connection torn down
+  Note over A,B: onclose fires with wasClean = true`;
+
+## Reading close codes
+
+The code is the connection's cause of death. Knowing them tells you whether to reconnect, give up, or fix a bug. The ones that matter:
+
+- **1000 — Normal Closure.** Everything finished as intended. The deliberate `ws.close()` your app calls. Do **not** auto-reconnect on this; the close was on purpose.
+- **1001 — Going Away.** A side is leaving — a browser tab navigating away, or a server shutting down for deploy. A client seeing 1001 should usually reconnect after a moment; the server is coming back.
+- **1006 — Abnormal Closure.** The one you met in the drop lessons. It means the connection died *without* a proper close frame — and critically, **no code is ever sent over the wire for 1006**; the browser fabricates it locally to tell you "this ended abnormally". Every accidental drop surfaces as 1006. This is your signal to reconnect with backoff.
+- **1011 — Internal Error.** The server hit an unexpected condition and is ending the connection. Reconnect is reasonable, but persistent 1011s mean a server bug to chase.
+- **4000-4999 — Application codes.** This whole range is reserved for *you*. The protocol will never define them, so they are yours to assign meaning: `4001` might be "auth token expired", `4002` "kicked by an admin", `4008` "you are rate limited". A client can branch on these — refresh the token and reconnect on `4001`, but stop and show a message on `4002`.
+
+The practical rule: **1000 means stop, most others mean reconnect, and 4000+ means do whatever you decided that code means.** Always include a code (and ideally a reason) when *you* close, so the other side can make exactly that decision.
+
+## Clean shutdown
+
+When your app deliberately ends a connection — the user logs out, navigates away, or closes a feature — close it *properly*:
+
+```ts
+function shutdown(ws: WebSocket) {
+  // 1000 = normal. The peer learns this was intentional and will not reconnect.
+  ws.close(1000, 'client navigating away');
+}
+```
+
+The reason a clean close matters is the flip side of everything in this module: a connection that ends with code 1000 tells the *other* end "do not reconnect, this was meant to happen". Skip it and you leave the server holding a phantom connection it must heartbeat to death — exactly the half-open mess we worked to avoid.
+
+## Resume — replaying what you missed
+
+Here is the reward for all the reconnect machinery. When a client drops and comes back, a naive app has a hole: every message the server sent during the gap is lost. The cure is **resumable state keyed by a last-seen id**.
+
+The pattern:
+
+1. The server stamps every message with a monotonically increasing id: `1, 2, 3, ...`.
+2. The client remembers the id of the last message it successfully processed — its `lastSeenId`.
+3. On reconnect, the client sends `lastSeenId` to the server as part of a resume request.
+4. The server replays every message with an id greater than `lastSeenId`, then resumes live delivery.
+
+The client comes back exactly where it left off, with no gap and no duplicates. (The server needs a short buffer of recent messages to replay from; truly old gaps may require a full state refresh instead, but for brief drops, replay is seamless.)
+
+## A live close-and-resume
+
+The demo below uses an in-page socket with the real `WebSocket` API. The mock server numbers every message it sends. We let the client receive a few, then the connection drops (close code 1006) while the server keeps producing messages. On reconnect, the client sends its `lastSeenId` and the server replays exactly the messages it missed — then resumes live.
+
+export const resumeCode = `(function () {
+  // In-page socket with the real WebSocket API. The mock numbers every message
+  // and supports a {type:'resume', lastSeenId} request that replays the gap.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  const serverLog = [];           // every message the server has ever produced
+  let nextId = 1;
+  function produce(text) { const m = { id: nextId++, text: text }; serverLog.push(m); return m; }
+  // Pre-produce the messages that will exist during the demo's timeline.
+  produce('msg A'); produce('msg B'); produce('msg C');
+
+  class ResumableSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 20);
+    }
+    send(data) {
+      const msg = JSON.parse(data);
+      if (msg.type === 'resume') {
+        const missed = serverLog.filter((m) => m.id > msg.lastSeenId);
+        setTimeout(() => {
+          for (const m of missed) {
+            if (this.onmessage) this.onmessage({ data: JSON.stringify({ type: 'event', id: m.id, text: m.text }) });
+          }
+        }, 20);
+      }
+    }
+    deliver(m) { if (this.onmessage) this.onmessage({ data: JSON.stringify({ type: 'event', id: m.id, text: m.text }) }); }
+    drop() { this.readyState = 3; if (this.onclose) this.onclose({ code: 1006, wasClean: false }); }
+    close(code) { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000, wasClean: true }); }
+  }
+
+  let lastSeenId = 0;
+  let firstConnection = true;
+
+  function connect() {
+    const ws = new ResumableSocket();
+    ws.onopen = () => {
+      if (firstConnection) {
+        console.log('connected — receiving live messages');
+        // Deliver the first two messages live, then drop mid-stream.
+        ws.deliver(serverLog[0]);
+        ws.deliver(serverLog[1]);
+        setTimeout(() => { console.log('--- connection dropped while msg C was still pending ---'); ws.drop(); }, 30);
+      } else {
+        console.log('reconnected — requesting resume from lastSeenId=' + lastSeenId);
+        ws.send(JSON.stringify({ type: 'resume', lastSeenId: lastSeenId }));
+      }
+    };
+    ws.onmessage = (event) => {
+      const m = JSON.parse(event.data);
+      if (m.type === 'event') {
+        lastSeenId = m.id;
+        console.log('received id ' + m.id + ': ' + m.text + ' (lastSeenId now ' + lastSeenId + ')');
+      }
+    };
+    ws.onclose = (event) => {
+      if (event.wasClean) { console.log('closed cleanly, code', event.code); return; }
+      console.log('dropped, code ' + event.code + ' — reconnecting to resume');
+      firstConnection = false;
+      setTimeout(connect, 40);
+    };
+  }
+  connect();
+})();`;
+
+<NodeRunner client:visible code={resumeCode} />
+
+Watch the order: the client receives messages 1 and 2 live, then the connection drops (code 1006) while message 3 is still queued on the server. The client reconnects, sends `lastSeenId=2`, and the server replays *only* message 3 — no gap, no duplicate of 1 or 2. That seamless catch-up is what every well-built real-time app does behind the scenes, and it is only possible because reconnection and a last-seen id work together.
+
+<Callout title="Close and resume in one line">
+Close cleanly with a **code** (1000 = on purpose, 1006 = it broke, 4000+ = your own meaning) so the other side knows whether to reconnect. Then, by stamping messages with ids and remembering the **last-seen id**, a reconnecting client replays exactly what it missed — closing the loop on the whole lifecycle.
+</Callout>
+
+export const quizClose = [
+  {
+    q: 'What does close code 1006 (Abnormal Closure) signify?',
+    options: [
+      'The application deliberately closed the connection normally',
+      'The connection died without a proper close frame — the browser fabricates 1006 locally; it is never sent over the wire',
+      'The server is shutting down for a planned deploy',
+      'The client was rate limited',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'After which close code should a client generally NOT auto-reconnect?',
+    options: [
+      '1006 — Abnormal Closure',
+      '1011 — Internal Error',
+      '1000 — Normal Closure, because the close was intentional',
+      '1001 — Going Away',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'How does a last-seen id let a reconnecting client resume without gaps or duplicates?',
+    options: [
+      'It re-downloads the entire history every time',
+      'The client sends its last-seen id and the server replays only messages with a greater id',
+      'It encrypts the connection so nothing is ever lost',
+      'It pings the server until all old messages are resent at random',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/close-codes-and-resume" questions={quizClose} />
+
+<ProgressTracker client:visible id="connection-lifecycle/close-codes-and-resume" />

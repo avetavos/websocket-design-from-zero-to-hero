@@ -1,0 +1,154 @@
+---
+title: 'JSON vs Binary'
+description: 'JSON ที่อ่านได้และใช้ได้ทุกที่ เทียบกับ format แบบ binary ที่กระชับอย่าง MessagePack, Protobuf และ CBOR การแลกเปลี่ยนเรื่องขนาดและประสิทธิภาพ เมื่อไรแต่ละแบบจึงชนะ พร้อมเดโม JSON สด'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+คุณตัดสินใจแล้วว่าจะส่งหนึ่ง object ที่มีโครงสร้างต่อหนึ่ง message ทางแยกถัดไปคือ *จะ encode* object นั้นบน wire อย่างไร WebSocket รับส่งได้ทั้ง **text** หรือ **binary** และทางเลือกเดียวนั้น — JSON เทียบกับ format แบบ binary — ส่งผลเงียบ ๆ ต่อความ debug ได้ง่าย ต่อ bandwidth และต่อ CPU ของคุณ
+
+## JSON: อ่านได้และอยู่ทุกที่
+
+`JSON.stringify` และ `JSON.parse` ถูกฝังอยู่ในทุกเบราว์เซอร์และทุก server runtime JSON นั้น **อธิบายตัวเองได้ (self-describing)** (ชื่อ field เดินทางไปพร้อมกับข้อมูล) มนุษย์อ่านได้ใน network inspector และทุกภาษาเข้าใจได้โดยไม่ต้องมีขั้น build สำหรับแอปพลิเคชันส่วนใหญ่อย่างท่วมท้น — chat, dashboards, notifications, การแก้ไขร่วมกัน — JSON คือค่าเริ่มต้นที่ถูกต้อง คุณอ่าน message ได้ในพริบตา และการรับ client ใหม่เข้ามาก็แค่ตกลงกันเรื่องชื่อ field เท่านั้น ไม่มีอะไรมากกว่านั้น
+
+ต้นทุนของมันก็มีจริงไม่แพ้กัน ชื่อ field ถูกทำซ้ำใน *ทุก* message ตัวเลขถูกเก็บเป็น text เลขฐานสิบ และไม่มี type ดั้งเดิมสำหรับ bytes ดิบ position update อย่าง `{"x":12,"y":48}` ใช้ bytes ส่วนใหญ่ไปกับ quotes, braces และตัวอักษร `x` กับ `y` มากกว่าค่าจริง
+
+## Binary: กระชับและเร็ว
+
+format การ serialize แบบ binary แลกความอ่านได้กับความหนาแน่น:
+
+- **MessagePack** — "JSON แต่เป็น binary" data model เดียวกัน (objects, arrays, numbers, strings) ไม่มี schema เหมือน JSON แต่ encode อย่างกระชับ มักเป็นการอัปเกรดจาก JSON ที่ง่ายที่สุด
+- **Protocol Buffers (Protobuf)** — schema-*first* คุณประกาศรูปร่าง message ในไฟล์ `.proto` *ชื่อ* field ไม่เคยเดินทางบน wire (มีแค่ numeric tags เล็ก ๆ เท่านั้น) ทำให้มันกระชับที่สุดและ parse ได้เร็วที่สุด โดยแลกกับขั้น code-generation และความยืดหยุ่นแบบ ad-hoc ที่น้อยลง
+- **CBOR** — format แบบ binary มาตรฐาน IETF (RFC 8949) ในตระกูล MessagePack พบได้ทั่วไปใน IoT และสภาพแวดล้อมที่มีข้อจำกัด
+
+สิ่งเหล่านี้เปล่งประกายเมื่อ message **เล็ก ถี่ และมีปริมาณสูง**: สถานะเกม multiplayer ที่ 60 อัปเดตต่อวินาที, market data feed, telemetry จาก sensor หลายพันตัว การเฉือน bytes และเวลา parse ต่อ message สะสมเพิ่มขึ้นอย่างรวดเร็ว
+
+<Mermaid title="พื้นที่ของการแลกเปลี่ยน: ความอ่านได้ เทียบกับ ความหนาแน่น" code={tradeoffDiagram} />
+
+export const tradeoffDiagram = `flowchart LR
+  subgraph json["JSON (text frame)"]
+    j1["readable · universal · self-describing"]
+    j2["larger · field names repeated"]
+  end
+  subgraph bin["Binary (binary frame)"]
+    b1["compact · fast to parse"]
+    b2["needs tooling · not human-readable"]
+  end
+  json -- "high volume? tiny messages?" --> bin
+  bin -- "debuggability? simplicity?" --> json`;
+
+## จะเลือกอย่างไร
+
+หลักคิดเชิงปฏิบัติ:
+
+- **ตั้งค่าเริ่มต้นเป็น JSON** หยิบมันมาใช้จนกว่าคุณจะวัดได้ว่ามีปัญหาจริง ความอ่านได้และการไม่ต้องมี tooling นั้นมีค่ามาก และแอปส่วนใหญ่ยังห่างไกลจากขีดจำกัด bandwidth หรือ CPU ที่การ encode จะมีความสำคัญ
+- **เปลี่ยนเป็น binary เมื่อตัวเลขเรียกร้อง** — อัตรา message สูง, payload ใหญ่, mobile client บนข้อมูลที่คิดค่าตามปริมาณ หรือ budget latency ที่เข้มงวด วัดก่อน profiler ชนะการคาดเดาเสมอ
+- **คุณผสมกันได้** ส่ง message ควบคุม/ตั้งค่าเป็น JSON เพื่อความชัดเจน และส่งสตรีมร้อนความถี่สูงเป็น binary วินัย field `type` จากบทเรียนที่แล้วใช้ได้กับ encoding ทั้งสองแบบ
+
+## เดโม JSON และรูปร่างของ binary ในโค้ด
+
+เดโมที่รันได้ด้านล่างส่ง JSON message และรายงานขนาดของมันบน wire — สัมผัสดูว่าโครงสร้างเองกินไปกี่ bytes มันใช้ `WebSocket` API จริงบน echo socket ภายในหน้า
+
+export const jsonSizeCode = `(function () {
+  // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 40); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+
+  ws.onopen = () => {
+    const update = { type: 'pos', x: 12, y: 48 };
+    const text = JSON.stringify(update);
+    console.log('JSON on the wire:', text);
+    console.log('byte length (text frame):', text.length);
+    console.log('note: only 4 of those bytes are the actual values 12 and 48');
+    ws.send(text);
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    console.log('parsed back:', msg.type, 'at', msg.x + ',' + msg.y);
+    ws.close();
+  };
+
+  ws.onclose = () => console.log('done — a binary encoding would carry the same values in far fewer bytes');
+})();`;
+
+<NodeRunner client:visible code={jsonSizeCode} />
+
+ในการตั้งค่า binary จริง คุณจะ encode *object เดียวกัน* ด้วย library ก่อนส่งมันเป็น binary frame ด้วย MessagePack รูปร่างจะหน้าตาแบบนี้ — สังเกต binary frame และ receive type ที่เป็น `arraybuffer`:
+
+```ts
+import { encode, decode } from '@msgpack/msgpack';
+
+// Tell the socket to hand binary messages back as ArrayBuffer, not Blob.
+const ws = new WebSocket('wss://your-server');
+ws.binaryType = 'arraybuffer';
+
+ws.onopen = () => {
+  const update = { type: 'pos', x: 12, y: 48 };
+  const bytes: Uint8Array = encode(update); // compact binary, no repeated field-name text
+  ws.send(bytes); // sent as a BINARY frame, not text
+};
+
+ws.onmessage = (event: MessageEvent) => {
+  // event.data is an ArrayBuffer for binary frames.
+  const msg = decode(new Uint8Array(event.data)) as { type: string; x: number; y: number };
+  console.log(msg.type, msg.x, msg.y);
+};
+```
+
+ตรรกะของแอปพลิเคชันเหมือนกับเวอร์ชัน JSON ทุกประการ — มีแค่การเรียก encode/decode และ frame type เท่านั้นที่เปลี่ยน นั่นคือเหตุผลที่คุณเริ่มด้วย JSON ได้และค่อย migrate hot path ไปเป็น binary ทีหลังหากการวัดเรียกร้อง
+
+<Callout title="ใจความสำคัญในหนึ่งบรรทัด">
+**JSON** อ่านได้ ใช้ได้ทุกที่ และเป็นค่าเริ่มต้นที่ถูกต้อง ส่วน format แบบ **binary** (MessagePack, Protobuf, CBOR) แลกความอ่านได้กับ message ที่เล็กลงและ parse ได้เร็วขึ้น — คุ้มค่าสำหรับสตรีมที่ปริมาณสูง เล็ก หรือ latency-critical ตั้งค่าเริ่มต้นเป็น JSON เปลี่ยนเมื่อการวัดเรียกร้อง
+</Callout>
+
+export const quizJsonBinary = [
+  {
+    q: 'อะไรคือเหตุผลที่หนักแน่นที่สุดในการตั้งค่าเริ่มต้นเป็น JSON สำหรับ WebSocket message?',
+    options: [
+      'มันเล็กกว่า binary บน wire เสมอ',
+      'มันอ่านได้ ใช้ได้ทุกที่ และไม่ต้องมี tooling หรือขั้น build',
+      'WebSocket ส่ง binary frame ไม่ได้',
+      'มัน parse เร็วกว่า binary format ใด ๆ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เมื่อไรที่ format แบบ binary ที่กระชับจึงคุ้มต้นทุนของมันได้ชัดเจนที่สุด?',
+    options: [
+      'สำหรับ message ตั้งค่าที่ใหญ่และไม่ค่อยเกิดเพียงไม่กี่อัน',
+      'สำหรับสตรีมที่เล็ก ถี่ ปริมาณสูง ซึ่ง bytes และเวลา parse ต่อ message สะสมเพิ่มขึ้น',
+      'เมื่อใดก็ตามที่ข้อมูลมี string',
+      'เฉพาะเมื่อ server เขียนด้วยภาษา C เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในโค้ด MessagePack ทำไมต้องตั้ง ws.binaryType = "arraybuffer"?',
+    options: [
+      'เพื่อบีบอัด JSON อัตโนมัติ',
+      'เพื่อให้ binary message มาถึงในรูป ArrayBuffer ที่ decoder อ่านได้ แทนที่จะเป็น Blob',
+      'มันสลับ connection ไปยัง port อื่น',
+      'มันจำเป็นสำหรับ JSON message ทุกอันด้วย',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/json-vs-binary" questions={quizJsonBinary} />
+
+<ProgressTracker client:visible id="message-design/json-vs-binary" />

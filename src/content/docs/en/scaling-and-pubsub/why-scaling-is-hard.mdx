@@ -1,0 +1,120 @@
+---
+title: 'Why Scaling Is Hard'
+description: 'Connection state lives in memory, the CPU and memory cost per connection, balancing long-lived connections, and stating the cross-instance broadcast problem precisely.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Scaling stateless HTTP is a solved, almost boring problem: requests are independent, so you put more identical servers behind a load balancer and you are done. WebSockets break that comfortable picture in four specific ways. This lesson names each one, because you cannot design around a problem you have only felt vaguely.
+
+## 1. Connection state lives in memory
+
+A request/response handler can finish and forget everything. A WebSocket handler cannot — the whole point is that the connection *persists*, and persisting means holding state for the entire lifetime of the socket.
+
+That state typically includes:
+
+- The socket itself (an OS file descriptor and kernel send/receive buffers).
+- Any send queue your library keeps for backpressure.
+- Application data you attached — user id, authenticated session, the set of rooms or channels this client subscribed to.
+
+```ts
+// A per-connection record. Multiply this by every open socket.
+interface Conn {
+  socket: WebSocket;      // OS descriptor + buffers underneath
+  userId: string;
+  rooms: Set<string>;     // which channels this client joined
+  lastSeen: number;       // for heartbeat/expiry bookkeeping
+}
+
+// This map IS the instance's knowledge of the world.
+// It exists only here, in this process's heap.
+const connections = new Map<string, Conn>();
+```
+
+The map above is the crux of the whole module. It is the only place this instance knows who is connected — and no other instance can read it.
+
+## 2. CPU and memory have a per-connection floor
+
+Idle HTTP connections cost almost nothing because they barely exist between requests. Idle WebSockets are different: each one is genuinely *open*, consuming a slice of memory and a file descriptor whether or not it is sending anything.
+
+- **Memory.** Kernel socket buffers plus your per-connection record add up. A few kilobytes each sounds trivial until you remember 50,000 connections means hundreds of megabytes before your app has done any work.
+- **File descriptors.** Every socket is a descriptor, and the OS limit (`ulimit -n`) is often a low default like 1024. Hit it and new connections fail to open with no obvious application bug.
+- **CPU on fan-out.** Sending one message to 10,000 clients is 10,000 individual writes. Broadcast cost scales with audience size, and a busy room can pin a core.
+
+The takeaway: a WebSocket server's ceiling is set by *concurrent open connections*, not by requests per second. You scale out long before CPU looks busy, simply because you ran out of memory or descriptors.
+
+## 3. Long-lived connections balance badly
+
+A load balancer spreads *new* connections across instances. But WebSockets are long-lived, so once a client lands on an instance it tends to stay there for minutes or hours.
+
+That has two awkward consequences:
+
+- **Load reflects history, not now.** If instance A was online during a traffic spike, it may hold far more connections than instance B that started later — and the balancer cannot rebalance live sockets without disconnecting people.
+- **Deploys are disruptive.** Restarting an instance drops every connection it holds. All those clients reconnect at once and the balancer shoves them onto whatever instances remain, creating a stampede (more on that in the presence lesson).
+
+<Mermaid title="A restart drops live connections; they all reconnect at once" code={rebalanceDiagram} />
+
+export const rebalanceDiagram = `flowchart TB
+  lb["Load balancer"]
+  A["Instance A — 8k sockets"]
+  B["Instance B — 2k sockets"]
+  lb --> A
+  lb --> B
+  A -- "deploy / crash" --> X["A's 8k sockets drop"]
+  X == "all reconnect at once" ==> lb
+  lb == "stampede onto survivors" ==> B`;
+
+## 4. The cross-instance broadcast problem, precisely
+
+Now we can state the central problem without hand-waving.
+
+> A broadcast on instance A iterates `A.connections`. A client connected to instance B is in `B.connections`, which A cannot read. Therefore the broadcast **cannot** reach that client — not slowly, not unreliably, but never, because no code path exists between the two heaps.
+
+This is not a bug to fix with retries or bigger buffers. It is a structural fact: two processes do not share memory. The only cure is to add a *channel between instances* so a message published anywhere is delivered everywhere — which is exactly the backplane in the next lesson.
+
+<Callout title="Four problems, one root">
+In-memory connection state, a per-connection resource floor, sticky long-lived load, and unreachable clients on other instances all trace back to the same root: each connection — and the knowledge of it — lives inside a single process. Every scaling technique in this module is a way to work around that.
+</Callout>
+
+export const quizHard = [
+  {
+    q: 'Why does a WebSocket server typically run out of room before its CPU looks busy?',
+    options: [
+      'Because TLS encryption is extremely CPU intensive',
+      'Because each open connection consumes memory and a file descriptor even while idle',
+      'Because load balancers throttle WebSocket traffic',
+      'Because Node.js cannot use more than one core',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is live load often uneven across WebSocket instances?',
+    options: [
+      'Load balancers always send everything to the first instance',
+      'Long-lived connections stay where they landed, so load reflects past traffic, not the present',
+      'Newer instances reject connections',
+      'WebSockets randomly migrate between servers',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why can’t retries or bigger buffers fix the cross-instance broadcast problem?',
+    options: [
+      'Retries are too slow for real-time apps',
+      'The two processes do not share memory, so no code path reaches the other instance’s sockets',
+      'Buffers overflow before the message is sent',
+      'The load balancer blocks repeated sends',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="scaling-and-pubsub/why-scaling-is-hard" questions={quizHard} />
+
+<ProgressTracker client:visible id="scaling-and-pubsub/why-scaling-is-hard" />

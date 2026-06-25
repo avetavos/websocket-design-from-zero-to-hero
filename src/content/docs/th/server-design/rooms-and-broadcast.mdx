@@ -1,0 +1,177 @@
+---
+title: 'Rooms and Broadcast'
+description: 'การจัดกลุ่ม client เข้าเป็น room และ channel, broadcast ไปยัง room เดียวเทียบกับทุกคนด้วย wss.clients, พร้อมเดโม Node fan-out ที่รันได้จริง'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+การ broadcast — หนึ่ง event ไปถึง client จำนวนมากพร้อมกัน — คือเหตุผลที่ WebSocket server มีอยู่ บทเรียนนี้ครอบคลุม broadcast สองรสชาติ (ไปยัง *ทุกคน* และไปยัง *room*) และโครงสร้างข้อมูลที่ทำให้ room ทำงานได้
+
+## การ broadcast ไปยังทุกคน
+
+ไลบรารี `ws` ให้ `wss.clients` มา ซึ่งเป็น `Set` ของทุก socket ที่เปิดอยู่ในขณะนั้น เพื่อส่งอะไรบางอย่างไปยังพวกเขาทั้งหมด ให้วน loop แล้ว send — โดยตรวจก่อนว่าแต่ละ socket เปิดอยู่จริง:
+
+```ts
+import { WebSocket } from 'ws';
+
+function broadcastAll(wss, message) {
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  }
+}
+```
+
+การ์ด `readyState === WebSocket.OPEN` มีความสำคัญ: socket อาจอยู่ระหว่างปิดหรือกำลังจะปิดอยู่แล้ว และการเรียก `send` บนมันจะ throw หรือ buffer แบบเงียบ ๆ กรองให้เหลือเฉพาะ OPEN ก่อน send เสมอ นี่คือ broadcast ที่ง่ายที่สุดเท่าที่จะเป็นไปได้ — มีประโยชน์สำหรับประกาศแบบ global แต่เป็นค้อนปอนด์สำหรับอะไรที่ต้องเจาะจง
+
+## Rooms: การ broadcast ไปยังกลุ่มย่อย
+
+แอปส่วนใหญ่ไม่ต้องการให้ *ทุกคน* ได้ยิน *ทุกอย่าง* ข้อความแชทอยู่ใน channel หนึ่ง; การอัปเดตเกมอยู่ในแมตช์หนึ่ง pattern คือ **room** — กลุ่มของ socket ที่มีชื่อ โครงสร้างข้อมูลคลาสสิกคือ `Map` จากชื่อ room ไปยัง `Set` ของ socket:
+
+```ts
+const rooms = new Map(); // roomName -> Set<ws>
+
+function join(room, ws) {
+  if (!rooms.has(room)) rooms.set(room, new Set());
+  rooms.get(room).add(ws);
+}
+
+function leave(room, ws) {
+  rooms.get(room)?.delete(ws);
+  if (rooms.get(room)?.size === 0) rooms.delete(room); // tidy up empty rooms
+}
+
+function broadcastRoom(room, message) {
+  for (const client of rooms.get(room) ?? []) {
+    if (client.readyState === WebSocket.OPEN) client.send(message);
+  }
+}
+```
+
+ตอนนี้ข้อความ fan ออกไปเฉพาะ socket ที่ join room นั้น — ไม่ใช่ทั้ง server สังเกตความสมมาตรกับบทเรียนก่อนหน้า: set `state.subscriptions` ของแต่ละ socket คือมุมมองของ *client* ต่อ room ของมัน ขณะที่ `rooms` map นี้คือ reverse index ของ *server* รักษาให้ทั้งสอง sync กันไว้
+
+<Mermaid title="Fan-out: ข้อความไปยัง room หนึ่งไปถึงเฉพาะสมาชิกของ room นั้น" code={fanoutDiagram} />
+
+export const fanoutDiagram = `flowchart TB
+  SENDER["client A<br/>(in room 'sports')"] -- "publish to 'sports'" --> S["server"]
+  S --> ROOM["room 'sports'"]
+  ROOM == "deliver" ==> B["client B ✓ in sports"]
+  ROOM == "deliver" ==> C["client C ✓ in sports"]
+  S -. "not delivered" .-> D["client D ✗ in 'news'"]`;
+
+Client D ซึ่ง join room อื่น ไม่เคยได้ยินข้อความเลย — การเลือกเจาะจงนั้นคือประเด็นทั้งหมดของ room
+
+## อย่า echo กลับไปหาผู้ส่ง (โดยทั่วไป)
+
+การขัดเกลาที่พบบ่อย: เมื่อ broadcast บรรทัดแชท คุณมักจะข้ามผู้ส่ง เพราะ client ของพวกเขาเองได้แสดงข้อความแบบ optimistic ไปแล้ว แค่เปรียบเทียบกับ socket ที่ส่ง:
+
+```ts
+for (const client of rooms.get(room) ?? []) {
+  if (client !== sender && client.readyState === WebSocket.OPEN) {
+    client.send(message);
+  }
+}
+```
+
+จะรวมผู้ส่งหรือไม่นั้นเป็นทางเลือกของแอปพลิเคชัน — บางแอป echo กลับเพื่อให้ UI ของผู้ส่งยืนยันว่า server ได้รับแล้ว ไม่ว่าทางใด toggle `client !== sender` คือวิธีที่คุณควบคุมมัน
+
+## broadcast server ที่รันได้จริง
+
+เดโมด้านล่าง implement room บน `ws` server จริง client ส่ง `{"type":"join","room":"x"}` เพื่อ join จากนั้น `{"type":"say","text":"hi"}` เพื่อ broadcast ไปยังทุกคนใน room ของมัน การ cleanup ตอน close จะลบ socket ออกจาก room ของมันเพื่อให้คุณไม่ broadcast ไปหา ghost เปิดมันใน StackBlitz แล้วเชื่อมต่อ client สองสามตัวเข้า room เดียวกัน
+
+export const broadcastCode = `// Real ws broadcast server. ws/wss/req in scope.
+// A module-level Map survives across connections (declared once on the server).
+wss.rooms = wss.rooms || new Map(); // roomName -> Set<ws>
+const rooms = wss.rooms;
+
+ws.room = null;
+
+function joinRoom(name) {
+  leaveRoom();
+  if (!rooms.has(name)) rooms.set(name, new Set());
+  rooms.get(name).add(ws);
+  ws.room = name;
+}
+function leaveRoom() {
+  if (ws.room && rooms.has(ws.room)) {
+    rooms.get(ws.room).delete(ws);
+    if (rooms.get(ws.room).size === 0) rooms.delete(ws.room);
+  }
+  ws.room = null;
+}
+function broadcastRoom(name, payload, except) {
+  for (const client of rooms.get(name) || []) {
+    if (client !== except && client.readyState === client.OPEN) {
+      client.send(JSON.stringify(payload));
+    }
+  }
+}
+
+ws.send(JSON.stringify({ type: 'hello', hint: 'join then say' }));
+
+ws.on('message', (data) => {
+  const msg = JSON.parse(data.toString());
+  if (msg.type === 'join') {
+    joinRoom(msg.room);
+    const size = rooms.get(msg.room).size;
+    ws.send(JSON.stringify({ type: 'joined', room: msg.room, members: size }));
+  } else if (msg.type === 'say' && ws.room) {
+    broadcastRoom(ws.room, { type: 'message', room: ws.room, text: msg.text }, ws);
+  }
+});
+
+// Remove from the room on disconnect so broadcasts never hit a ghost.
+ws.on('close', leaveRoom);
+ws.on('error', leaveRoom);`;
+
+<NodeRunner node client:visible code={broadcastCode} />
+
+เมื่อมี client สองตัว join เข้า room เดียวกัน `say` จากตัวหนึ่งจะไปถึงอีกตัว แต่ไม่กลับไปหาผู้ส่ง (เราส่ง `ws` เป็น argument `except`) client ตัวที่สามใน room อื่นไม่ได้ยินอะไรเลย การ fan-out แบบเจาะจงนั้น — หนุนด้วย `Map` ของ `Set` และการ cleanup ที่มีวินัย — คือเครื่องยนต์แกนกลางของทุกฟีเจอร์แชท, presence, และ live-collaboration ที่คุณจะสร้าง
+
+<Callout title="ทุกคน vs room">
+`wss.clients` คือ set ของทุก socket — วน loop มัน (โดยการ์ดด้วย `readyState === OPEN`) เพื่อ broadcast ไปยังทุกคน สำหรับการส่งแบบเจาะจง เก็บ `Map<room, Set<ws>>` ไว้, fan ออกไปเฉพาะสมาชิกของ room นั้น, ข้ามผู้ส่งได้ตามต้องการ, และลบ socket ออกจาก room ของมันตอน close
+</Callout>
+
+export const quizRooms = [
+  {
+    q: '`wss.clients` ในไลบรารี ws คืออะไร?',
+    options: [
+      'รายการของชื่อ room',
+      'Set ของทุก socket ที่เชื่อมต่ออยู่ในขณะนั้น',
+      'จำนวนข้อความที่ส่งไป',
+      'queue ของ upgrade ที่ค้างอยู่',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมต้องตรวจ `client.readyState === WebSocket.OPEN` ก่อนเรียก `send` ระหว่าง broadcast?',
+    options: [
+      'เพื่อให้ข้อความไปถึงเร็วขึ้น',
+      'เพราะ socket อาจกำลังปิดอยู่ และการ send ไปยัง socket ที่ไม่ open อาจ throw หรือ buffer อย่างสิ้นเปลือง',
+      'เพราะ send ทำงานเฉพาะกับ client ตัวแรก',
+      'เพื่อ encrypt payload',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'โครงสร้างข้อมูลใดที่ model room สำหรับ broadcast แบบเจาะจงได้อย่างสะอาด?',
+    options: [
+      'array เดียวของทุกข้อความ',
+      'Map จากชื่อ room ไปยัง Set ของ socket',
+      'string ของ user id ที่คั่นด้วยจุลภาค',
+      'counter ของ client ที่เชื่อมต่ออยู่',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-design/rooms-and-broadcast" questions={quizRooms} />
+
+<ProgressTracker client:visible id="server-design/rooms-and-broadcast" />

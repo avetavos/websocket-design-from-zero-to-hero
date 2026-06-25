@@ -1,0 +1,154 @@
+---
+title: 'JSON vs Binary'
+description: 'Readable, universal JSON versus compact binary formats like MessagePack, Protobuf and CBOR. The size and performance trade-offs, when each wins, with a live JSON demo.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+You have decided to send one structured object per message. The next fork in the road is *how to encode* that object on the wire. The WebSocket can carry **text** or **binary**, and that single choice — JSON versus a binary format — quietly shapes your debuggability, your bandwidth, and your CPU.
+
+## JSON: readable and everywhere
+
+`JSON.stringify` and `JSON.parse` are built into every browser and every server runtime. JSON is **self-describing** (the field names travel with the data), human-readable in a network inspector, and understood by every language without a build step. For the overwhelming majority of applications — chat, dashboards, notifications, collaborative editing — JSON is the correct default. You can read a message at a glance, and onboarding a new client means agreeing on field names, nothing more.
+
+Its costs are equally real. Field names are repeated in *every* message, numbers are stored as decimal text, and there is no native type for raw bytes. A position update of `{"x":12,"y":48}` spends most of its bytes on the quotes, braces, and the letters `x` and `y` rather than the actual values.
+
+## Binary: compact and fast
+
+Binary serialization formats trade readability for density:
+
+- **MessagePack** — "JSON, but binary". Same data model (objects, arrays, numbers, strings), schema-less like JSON, but encoded compactly. Often the easiest upgrade from JSON.
+- **Protocol Buffers (Protobuf)** — schema-*first*. You declare your message shape in a `.proto` file; field *names* never travel on the wire (only small numeric tags do), making it the most compact and the fastest to parse, at the cost of a code-generation step and less ad-hoc flexibility.
+- **CBOR** — an IETF-standard binary format (RFC 8949) in the MessagePack family, common in IoT and constrained environments.
+
+These shine when messages are **small, frequent, and high-volume**: multiplayer game state at 60 updates a second, a market data feed, telemetry from thousands of sensors. Shaving bytes and parse time per message adds up fast.
+
+<Mermaid title="The trade-off space: readability versus density" code={tradeoffDiagram} />
+
+export const tradeoffDiagram = `flowchart LR
+  subgraph json["JSON (text frame)"]
+    j1["readable · universal · self-describing"]
+    j2["larger · field names repeated"]
+  end
+  subgraph bin["Binary (binary frame)"]
+    b1["compact · fast to parse"]
+    b2["needs tooling · not human-readable"]
+  end
+  json -- "high volume? tiny messages?" --> bin
+  bin -- "debuggability? simplicity?" --> json`;
+
+## How to choose
+
+A practical rule of thumb:
+
+- **Default to JSON.** Reach for it unless you have measured a real problem. Readability and zero tooling are worth a lot, and most apps are nowhere near the bandwidth or CPU limits where encoding matters.
+- **Switch to binary when the numbers demand it** — high message rates, large payloads, mobile clients on metered data, or strict latency budgets. Measure first; a profiler beats a hunch.
+- **You can mix.** Send control/setup messages as JSON for clarity and a hot high-frequency stream as binary. The `type` field discipline from the last lesson works in either encoding.
+
+## A JSON demo, and the binary shape in code
+
+The runnable demo below sends a JSON message and reports its size on the wire — feel how many bytes the structure itself costs. It uses the real `WebSocket` API on an in-page echo socket.
+
+export const jsonSizeCode = `(function () {
+  // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 40); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+
+  ws.onopen = () => {
+    const update = { type: 'pos', x: 12, y: 48 };
+    const text = JSON.stringify(update);
+    console.log('JSON on the wire:', text);
+    console.log('byte length (text frame):', text.length);
+    console.log('note: only 4 of those bytes are the actual values 12 and 48');
+    ws.send(text);
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    console.log('parsed back:', msg.type, 'at', msg.x + ',' + msg.y);
+    ws.close();
+  };
+
+  ws.onclose = () => console.log('done — a binary encoding would carry the same values in far fewer bytes');
+})();`;
+
+<NodeRunner client:visible code={jsonSizeCode} />
+
+In a real binary setup you would encode the *same object* with a library before sending it as a binary frame. With MessagePack the shape looks like this — note the binary frame and the `arraybuffer` receive type:
+
+```ts
+import { encode, decode } from '@msgpack/msgpack';
+
+// Tell the socket to hand binary messages back as ArrayBuffer, not Blob.
+const ws = new WebSocket('wss://your-server');
+ws.binaryType = 'arraybuffer';
+
+ws.onopen = () => {
+  const update = { type: 'pos', x: 12, y: 48 };
+  const bytes: Uint8Array = encode(update); // compact binary, no repeated field-name text
+  ws.send(bytes); // sent as a BINARY frame, not text
+};
+
+ws.onmessage = (event: MessageEvent) => {
+  // event.data is an ArrayBuffer for binary frames.
+  const msg = decode(new Uint8Array(event.data)) as { type: string; x: number; y: number };
+  console.log(msg.type, msg.x, msg.y);
+};
+```
+
+The application logic is identical to the JSON version — only the encode/decode calls and the frame type change. That is exactly why you can start with JSON and migrate the hot paths to binary later if measurements ask for it.
+
+<Callout title="The one-line takeaway">
+**JSON** is readable, universal, and the right default. **Binary** formats (MessagePack, Protobuf, CBOR) trade readability for smaller messages and faster parsing — worth it for high-volume, tiny, or latency-critical streams. Default to JSON; switch when measurements demand it.
+</Callout>
+
+export const quizJsonBinary = [
+  {
+    q: 'What is the strongest reason to default to JSON for WebSocket messages?',
+    options: [
+      'It is always smaller on the wire than binary',
+      'It is readable, universal, and needs no tooling or build step',
+      'WebSocket cannot send binary frames',
+      'It parses faster than any binary format',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When do compact binary formats most clearly earn their cost?',
+    options: [
+      'For a handful of large, infrequent setup messages',
+      'For small, frequent, high-volume streams where bytes and parse time per message add up',
+      'Whenever the data contains strings',
+      'Only when the server is written in C',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In the MessagePack code, why set ws.binaryType = "arraybuffer"?',
+    options: [
+      'To compress the JSON automatically',
+      'So binary messages arrive as an ArrayBuffer that the decoder can read, rather than a Blob',
+      'It switches the connection to a different port',
+      'It is required for all JSON messages too',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/json-vs-binary" questions={quizJsonBinary} />
+
+<ProgressTracker client:visible id="message-design/json-vs-binary" />

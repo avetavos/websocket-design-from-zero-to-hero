@@ -1,0 +1,158 @@
+---
+title: 'Backpressure'
+description: 'When a slow client can not keep up — ws.bufferedAmount, dropping and coalescing, flow control, send callbacks, and protecting the server memory.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Broadcasting feels free until one client cannot drink as fast as you pour. A phone on a weak network, a tab the OS throttled, a laptop that went to sleep — these clients read slowly, and your fast server keeps calling `send`. The unsent data has to go *somewhere*, and that somewhere is the server's memory. This is **backpressure**, and ignoring it is how a single slow client takes down a server.
+
+## Where the bytes pile up
+
+`ws.send(data)` does not block until the client receives the data — it hands the bytes to the OS socket buffer and returns immediately. If the client reads slowly, that buffer fills, and further unsent data queues **inside your Node process**. Send to a stuck client in a tight loop and you are effectively building an unbounded in-memory queue:
+
+<Mermaid title="A slow reader turns a fast producer into a growing memory queue" code={backpressureDiagram} />
+
+export const backpressureDiagram = `flowchart LR
+  PROD["server<br/>produces fast"] --> SEND["ws.send()"]
+  SEND --> BUF["per-socket send buffer<br/>(ws.bufferedAmount grows)"]
+  BUF -- "drains slowly" --> SLOW["slow client"]
+  BUF -. "if it keeps growing" .-> OOM["server memory exhausted"]`;
+
+The danger is not one slow client — it is that nothing stops the queue from growing without bound. The fix is to **measure** the backlog and **react** when it is too big.
+
+## Measuring with bufferedAmount
+
+Every `ws` socket exposes `ws.bufferedAmount` — the number of bytes that have been queued by `send` but not yet flushed to the OS. It is your backpressure gauge. Before sending non-critical data, check it:
+
+```ts
+const HIGH_WATER_MARK = 1 << 20; // 1 MiB of pending bytes
+
+function safeSend(ws, data) {
+  if (ws.bufferedAmount > HIGH_WATER_MARK) {
+    // This client is behind. Do not pile more on.
+    return false; // dropped
+  }
+  ws.send(data);
+  return true;
+}
+```
+
+When `bufferedAmount` crosses your threshold, the client is not keeping up, and the right move is usually **not** "send anyway."
+
+## Strategies when a client is behind
+
+What you do at the high-water mark depends on the data:
+
+- **Drop.** For a live feed (prices, telemetry, cursor positions), an old update is worthless once a newer one exists. Just skip the send. The client catches up on the next message.
+- **Coalesce.** Instead of sending every tick, keep only the **latest** state per client and send that when the buffer drains. Ten queued price updates collapse into one current price.
+- **Disconnect.** If a client stays hopelessly behind past a grace period, close the socket (e.g. code `1013`, "try again later"). A reconnect with a fresh snapshot beats an ever-growing buffer.
+- **Flow control.** For data you cannot drop (a file transfer), stop producing until the buffer drains — let the slow consumer set the pace.
+
+The unifying principle: **bound the memory.** Whatever you choose, the queue for any one client must have a ceiling.
+
+## The send callback
+
+`ws.send` accepts a callback that fires once the data has been handed off (or errored). It is a per-message signal you can use to pace a producer — only queue the next chunk after the previous one is flushed:
+
+```ts
+function pump(ws, chunks, i = 0) {
+  if (i >= chunks.length) return;
+  if (ws.readyState !== ws.OPEN) return;
+  ws.send(chunks[i], (err) => {
+    if (err) return; // socket gone
+    // Only schedule the next chunk once this one has drained.
+    if (ws.bufferedAmount < (1 << 20)) pump(ws, chunks, i + 1);
+    else setTimeout(() => pump(ws, chunks, i + 1), 50);
+  });
+}
+```
+
+This is the WebSocket equivalent of respecting a stream's `drain` event: never get more than a bounded amount ahead of the slowest consumer.
+
+## Watch a slow client back up
+
+The demo below simulates a high-rate producer that checks `bufferedAmount` before each send. It drops updates when the (simulated) buffer is over the limit and reports how many it sent versus dropped — exactly the behaviour a real feed needs.
+
+export const backpressureCode = `// Backpressure-aware producer. ws/wss/req in scope.
+const HIGH_WATER = 64 * 1024; // 64 KiB ceiling for this demo
+let sent = 0, dropped = 0, seq = 0;
+
+ws.send(JSON.stringify({ type: 'hello', note: 'streaming updates with backpressure guard' }));
+
+const timer = setInterval(() => {
+  if (ws.readyState !== ws.OPEN) { clearInterval(timer); return; }
+  seq += 1;
+  const update = JSON.stringify({ type: 'tick', seq, value: Math.random() });
+
+  // The real backpressure check: how much have we queued but not flushed?
+  if (ws.bufferedAmount > HIGH_WATER) {
+    dropped += 1; // client is behind — drop this stale update
+  } else {
+    ws.send(update);
+    sent += 1;
+  }
+
+  if (seq % 20 === 0) {
+    console.log(\`seq=\${seq} sent=\${sent} dropped=\${dropped} buffered=\${ws.bufferedAmount}\`);
+  }
+  if (seq >= 200) {
+    clearInterval(timer);
+    ws.send(JSON.stringify({ type: 'done', sent, dropped }));
+  }
+}, 5);
+
+// Stop producing the moment the client leaves — no orphaned timers.
+ws.on('close', () => clearInterval(timer));
+ws.on('error', () => clearInterval(timer));`;
+
+<NodeRunner node client:visible code={backpressureCode} />
+
+A healthy client drains fast enough that `bufferedAmount` stays near zero and almost nothing is dropped. Throttle the consumer and you would see `dropped` climb while memory stays flat — which is the whole point. Note the `clearInterval` on `close`: an orphaned producer that keeps running after the client left is its own kind of leak. Protecting the server's memory is the last responsibility of a WebSocket server, and the one that decides whether it survives a bad network day.
+
+<Callout title="Bound every client's buffer">
+`ws.send` returns immediately and queues unsent bytes in your process — a slow client grows that queue without limit. Watch `ws.bufferedAmount`, and at a high-water mark **drop** stale updates, **coalesce** to the latest, apply **flow control** via the send callback, or **disconnect** a hopeless client. The goal is always a bounded per-client buffer so one slow reader can never exhaust server memory.
+</Callout>
+
+export const quizBackpressure = [
+  {
+    q: 'What does `ws.bufferedAmount` tell you?',
+    options: [
+      'How many clients are connected',
+      'The number of bytes queued by send but not yet flushed to the socket',
+      'The total messages received',
+      'The connection latency in milliseconds',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is a slow client a memory risk for the server?',
+    options: [
+      'It opens too many connections',
+      'send returns immediately and unsent bytes queue in the server process, growing without bound',
+      'It encrypts data twice',
+      'It forces the server to poll',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'For a live price feed, which strategy fits a client that has fallen behind?',
+    options: [
+      'Buffer every tick forever so none are lost',
+      'Drop or coalesce to the latest value, since old ticks are worthless',
+      'Resend the entire history on every tick',
+      'Switch the client to HTTP polling',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-design/backpressure" questions={quizBackpressure} />
+
+<ProgressTracker client:visible id="server-design/backpressure" />

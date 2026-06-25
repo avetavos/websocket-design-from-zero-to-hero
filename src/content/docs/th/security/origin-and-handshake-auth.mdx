@@ -1,0 +1,154 @@
+---
+title: 'Origin and Handshake Auth'
+description: 'WebSocket ไม่ถูกป้องกันด้วย CORS — validate Origin header ฝั่งเซิร์ฟเวอร์และทำ authenticate ระหว่าง handshake โดยไม่ทำให้ token รั่ว'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+จุดแรกที่ WebSocket จะทรยศคุณได้คือ **handshake** — HTTP request หนึ่งเดียวที่อัปเกรดการเชื่อมต่อธรรมดาให้กลายเป็น socket มีสองคำถามที่ต้องตอบตรงนั้น และถ้าคุณข้ามข้อใดข้อหนึ่ง ไม่มีอะไรในภายหลังจะช่วยคุณได้: *หน้าไหนกำลังเปิดการเชื่อมต่อนี้?* และ *ผู้ใช้ที่อยู่เบื้องหลังเป็นใคร?*
+
+## WebSocket ไม่ถูกป้องกันด้วย CORS
+
+นี่คือกับดักที่ดักได้แทบทุกคน เมื่อหน้าเว็บเรียก `fetch('https://your-api/...')` ข้าม origin เบราว์เซอร์จะรันกลไก CORS: มันอาจส่ง preflight และมันจะซ่อน response เว้นแต่เซิร์ฟเวอร์ของคุณจะ opt in ด้วย header ที่ถูกต้อง การป้องกันนั้นเป็นแบบอัตโนมัติ
+
+การอัปเกรด WebSocket ไม่ได้รับ **อะไรเลยจากสิ่งนั้น** เมื่อหน้าเว็บใด ๆ — รวมถึง `https://evil.example` — รันสิ่งนี้:
+
+```ts
+const ws = new WebSocket('wss://your-server/socket');
+```
+
+เบราว์เซอร์จะ **ไม่** ส่ง CORS preflight, **ไม่** ปรึกษา same-origin policy, และ **จะ** แนบ cookie ของผู้ใช้สำหรับ `your-server` ถ้ามีอยู่ คำขออัปเกรดออกจากเบราว์เซอร์และมาถึงเซิร์ฟเวอร์ของคุณโดยดูเหมือนคำขอที่ถูกต้องเป๊ะ ๆ ถ้าผู้ใช้ล็อกอินอยู่ หน้าเว็บของผู้โจมตีก็มี socket ที่ authenticate แล้ว นี่คือ **Cross-Site WebSocket Hijacking** — ญาติของ CSRF
+
+สิ่งเดียวที่เบราว์เซอร์ *ให้* คุณคือ `Origin` header บน handshake ซึ่งตั้งเป็นหน้าที่เปิด socket และสคริปต์ปลอมแปลงไม่ได้ การอ่านและตรวจ header นั้นคือการป้องกัน และมันอยู่บนฝั่งของคุณทั้งหมด
+
+```http
+GET /socket HTTP/1.1
+Host: your-server
+Upgrade: websocket
+Connection: Upgrade
+Origin: https://app.example.com
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Cookie: session=…
+```
+
+จัดเก็บ allowlist ของ origin ที่คุณไว้ใจ และปฏิเสธทุกอย่างที่เหลือ **ก่อน** ที่จะทำการอัปเกรดให้เสร็จ
+
+## Authenticate ระหว่าง handshake
+
+Origin บอกคุณว่า *หน้าไหน* คุณยังต้องการ *ผู้ใช้คนไหน* ทำ authenticate การเชื่อมต่อในขณะที่มันยังเป็น HTTP request อยู่ — นั่นคือช่วงที่คุณมี header, cookie, และอิสระที่จะปฏิเสธอย่างสะอาด มีสามวิธีทั่วไปในการพา credential ไป:
+
+- **Session cookie** ถ้าผู้ใช้ล็อกอินอยู่แล้วบน `https://app.example.com`, handshake จะพา cookie ของพวกเขาไปโดยอัตโนมัติ Validate มันฝั่งเซิร์ฟเวอร์ วิธีนี้สะดวกแต่เป็น *สิ่งที่ทำให้* Cross-Site WebSocket Hijacking เป็นไปได้พอดี — ซึ่งเป็นเหตุผลว่าทำไมการตรวจ `Origin` จึงเป็นข้อบังคับเมื่อคุณ authenticate ด้วย cookie
+- **Token ใน subprotocol** ส่ง bearer token ผ่าน `Sec-WebSocket-Protocol` header (อาร์กิวเมนต์ที่สองของ `new WebSocket(url, protocols)`) มันเดินทางใน header ไม่ใช่ตำแหน่งที่ถูก log และเซิร์ฟเวอร์อ่านมันได้ระหว่างการอัปเกรด
+- **Token ใน message แรก** เปิด socket จากนั้นทำให้ frame แรกสุดของไคลเอนต์เป็น message แบบ `auth` เซิร์ฟเวอร์จะคงการเชื่อมต่อไว้แบบยังไม่ authenticate และเงียบจนกว่า frame นั้นจะ validate ผ่าน
+
+และมี anti-pattern หนึ่งที่ต้องเลี่ยงเหนือสิ่งอื่นใด:
+
+<Callout title="อย่าใส่ token ไว้ใน URL เด็ดขาด">
+**อย่า** ทำ `new WebSocket('wss://server/socket?token=eyJ...')` query string จะถูกเขียนลงใน **access log**, proxy log, และประวัติเบราว์เซอร์ และอาจรั่วผ่าน `Referer` header — ดังนั้น bearer token ของคุณจะไปนั่งอยู่เป็น plaintext ในที่อีกหลายแห่งที่คุณควบคุมไม่ได้ จงพา credential ไปใน cookie, subprotocol header, หรือ message แรกแทน
+</Callout>
+
+## handshake ที่ authenticate แล้ว ทีละขั้น
+
+<Mermaid title="การตรวจ Origin และ validate token ระหว่าง WebSocket handshake" code={handshakeDiagram} />
+
+export const handshakeDiagram = `sequenceDiagram
+  participant C as Browser (page)
+  participant S as WebSocket server
+  C->>S: GET /socket  Upgrade: websocket<br/>Origin: app.example.com<br/>Sec-WebSocket-Protocol: bearer, &lt;token&gt;
+  S->>S: 1. Origin in allowlist?
+  alt Origin not allowed
+    S-->>C: reject upgrade / close 1008
+  else Origin OK
+    S->>S: 2. Validate token / cookie
+    alt Token invalid or expired
+      S-->>C: close 1008 (policy violation)
+    else Authenticated
+      S-->>C: 101 Switching Protocols
+      Note over C,S: Connection open — identity now fixed
+    end
+  end`;
+
+สังเกตว่าการตรวจทั้งสองเกิดขึ้น *ก่อน* `101 Switching Protocols` origin ที่ถูกปฏิเสธหรือ token ที่ผิดจะไม่มีวันกลายเป็น socket ที่เปิดอยู่ — และเมื่อเราปิด เราใช้ code **1008 (policy violation)** ซึ่งเป็นสัญญาณมาตรฐานว่าการเชื่อมต่อถูกปฏิเสธเพราะกฎ ไม่ใช่ความผิดพลาดของเครือข่าย
+
+## เซิร์ฟเวอร์ที่รันได้จริงซึ่งปฏิเสธ origin และ token ที่แย่
+
+เดโมด้านล่างคือ **body ของ `connection` handler** สำหรับเซิร์ฟเวอร์ `ws` จริง ๆ ไลบรารี `ws` ส่ง `req` ให้คุณ — คำขออัปเกรดดั้งเดิม — ดังนั้น header ของมันยังคงใช้ได้ เราตรวจ `req.headers.origin` เทียบกับ allowlist จากนั้นดึง token จาก `Sec-WebSocket-Protocol` header แล้ว validate มัน อะไรก็ตามที่ไม่ผ่านจะได้รับ `ws.close(1008, …)` เปิดมันใน StackBlitz แล้วรัน `npm run client` เพื่อดูว่าการเชื่อมต่อถูกยอมรับหรือถูกปฏิเสธ
+
+export const handshakeServerCode = `// Body of wss.on('connection', (ws, req) => { ... }). ws/wss/req in scope.
+const ALLOWED_ORIGINS = ['https://app.example.com', 'http://localhost:8080'];
+const VALID_TOKENS = { 'tok-alice': 'alice', 'tok-bob': 'bob' };
+
+// 1. Origin check — the browser cannot forge this header.
+const origin = req.headers.origin;
+if (!origin || !ALLOWED_ORIGINS.includes(origin)) {
+  console.log('rejecting connection: bad origin', origin);
+  ws.close(1008, 'origin not allowed');
+  return;
+}
+
+// 2. Token check — read it from the subprotocol header, NOT the URL.
+//    Header looks like: "bearer, tok-alice"
+const protoHeader = req.headers['sec-websocket-protocol'] || '';
+const token = String(protoHeader).split(',').map((s) => s.trim())[1];
+const user = VALID_TOKENS[token];
+if (!user) {
+  console.log('rejecting connection: bad token', token);
+  ws.close(1008, 'invalid token');
+  return;
+}
+
+// Authenticated. Pin the identity to this socket for later authorization.
+ws.user = user;
+console.log(\`authenticated \${user} from \${origin}\`);
+ws.send(\`welcome \${user} — your connection is authenticated\`);`;
+
+<NodeRunner node client:visible code={handshakeServerCode} />
+
+ไคลเอนต์ของ starter เปิดด้วย origin แบบ localhost แต่ไม่มี token ดังนั้นคุณจะเห็นเซิร์ฟเวอร์ปฏิเสธมันด้วย **close 1008** และ `invalid token` — ตรงกับการปฏิเสธที่หน้าเว็บของผู้โจมตีจะเจอเป๊ะ ๆ แก้ `VALID_TOKENS` หรือให้ไคลเอนต์ส่ง subprotocol เพื่อดูเส้นทางที่ถูกยอมรับ แนวคิดสำคัญ: เมื่อ socket เปิดแล้ว ทั้ง *หน้าไหน* และ *ผู้ใช้คนไหน* ก็ถูกจัดการเรียบร้อยแล้ว และคำตอบของ "นี่คือใคร?" ถูกเก็บไว้บนตัวการเชื่อมต่อเองแล้ว
+
+<Callout title="ป้องกันประตู แล้วค่อยไว้ใจห้อง">
+handshake คือช่วงเดียวที่คุณมี HTTP header, cookie, และวิธีปฏิเสธอย่างสะอาดได้อย่างราคาถูก ตรวจ `Origin` เทียบกับ allowlist, validate credential (cookie, subprotocol token, หรือ first-message token — ไม่ใช่ URL), และปิดความพยายามที่แย่ด้วย **1008** ทุกอย่างหลังจากนี้ขึ้นอยู่กับการทำการตรวจสองอย่างนี้ให้ถูกต้อง
+</Callout>
+
+export const quizOrigin = [
+  {
+    q: 'Why is the Origin header check on the server mandatory for cookie-authenticated WebSockets?',
+    options: [
+      'Because the Origin header improves performance',
+      'Because the browser does no CORS preflight for WebSocket upgrades, so without it any site can open an authenticated socket using the user’s cookies',
+      'Because cookies are not sent on WebSocket upgrades',
+      'Because TLS requires it',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where should an authentication token NOT be placed?',
+    options: [
+      'In a session cookie',
+      'In the Sec-WebSocket-Protocol subprotocol header',
+      'In the connection URL’s query string',
+      'In the first message after the socket opens',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which close code does the demo use to refuse a connection with a bad origin or token?',
+    options: [
+      '1000 (normal closure)',
+      '1006 (abnormal closure)',
+      '1008 (policy violation)',
+      '1011 (internal error)',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="security/origin-and-handshake-auth" questions={quizOrigin} />
+
+<ProgressTracker client:visible id="security/origin-and-handshake-auth" />

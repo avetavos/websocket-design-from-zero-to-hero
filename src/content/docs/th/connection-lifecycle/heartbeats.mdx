@@ -1,0 +1,170 @@
+---
+title: 'Heartbeats'
+description: 'ทำไม TCP/WebSocket connection ถึงดูเหมือนยังมีชีวิตทั้งที่ตายไปแล้ว protocol ping/pong frame เทียบกับ app-level heartbeat และเดโม ping/pong แบบสด'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ในบทเรียนที่แล้วเราบอกว่าการไถลเงียบ ๆ จาก *live* ไปสู่ *dropped* คือ transition ที่แอปลืม บทเรียนนี้อธิบายว่า **ทำไมมันถึงเงียบ** — และมอบเครื่องมือหนึ่งเดียวที่ทำลายความเงียบนั้น: heartbeat
+
+## Connection ที่เงียบและ connection ที่ตายดูเหมือนกัน
+
+นี่คือความจริงที่อึดอัดเกี่ยวกับ socket ที่เปิดอยู่: **การไม่ทำอะไรเลยดูเหมือนการพังเป๊ะ ๆ** ถ้าไม่มีฝ่ายใดส่งข้อความเลยเป็นเวลาสามสิบวินาที จะมีคำอธิบายที่เป็นไปได้สองอย่าง และจากภายในแล้วมันแยกแยะกันไม่ออก:
+
+- ทุกอย่างปกติดี และก็แค่ไม่มีใครมีอะไรจะพูด
+- Connection ตายไปเมื่อสิบวินาทีที่แล้ว — Wi-Fi handoff แลปท็อปที่หลับ load balancer ที่กำจัด stream ที่ idle ทิ้ง — และ packet ที่ประกาศการตายของมันไม่เคยมาถึง
+
+TCP เองก็ช่วยคุณไม่ได้ตรงนี้ TCP รู้ว่า connection พังก็ต่อเมื่อมันพยายามส่งแล้ว acknowledgement ไม่เคยกลับมา ถ้าแอปของคุณ *idle* TCP ก็ idle ด้วย ดังนั้นมันจึงไม่เคยพยายามส่ง จึงไม่เคยรู้ TCP keepalive ที่ติดมากับ operating system อาจใช้เวลาเป็น **ชั่วโมง** กว่าจะทำงานตามค่าเริ่มต้น — ไร้ประโยชน์สำหรับแอป real-time ผลก็คือ: object `WebSocket` ของคุณรายงานอย่างมีความสุขว่า `readyState === 1` (OPEN) บน connection ที่กลายเป็นซากปรักหักพังมาหลายนาทีแล้ว
+
+ทางรักษาเดียวคือ **สร้าง traffic อย่างจงใจ** ในช่วงเวลาที่รู้ และตรวจสอบว่ามันกลับมา นั่นคือ heartbeat
+
+## Heartbeat สองชนิด
+
+มีกลไกที่แตกต่างกันสองอย่าง และผู้คนสับสนระหว่างสองอย่างนี้อยู่เสมอ
+
+- **Protocol ping/pong frame** WebSocket protocol นิยาม control frame พิเศษไว้: *ping* frame และ *pong* frame ตามสเปก เมื่อ endpoint รับ ping มันต้องตอบด้วย pong สิ่งเหล่านี้อยู่ใต้ message handler ของคุณ — มันเป็นส่วนหนึ่งของ framing layer ที่ครอบคลุมในโมดูล foundations
+- **Application-level heartbeat** ข้อความธรรมดาที่โค้ดของคุณส่งและตอบ เช่น JSON `{"type":"ping"}` ที่ server ของคุณตอบกลับด้วย `{"type":"pong"}`
+
+ทำไมถึงต้องสร้างเวอร์ชัน app-level ในเมื่อ protocol ให้ ping/pong มาฟรี ๆ อยู่แล้ว? เพราะ **เบราว์เซอร์ไม่อนุญาตให้คุณใช้ protocol frame เหล่านั้น** `WebSocket` API ของเบราว์เซอร์ไม่มี method `ping()` และไม่ยิง event ใดเมื่อ ping หรือ pong มาถึง — มันถูกจัดการอย่างมองไม่เห็นภายในเบราว์เซอร์ *server* ที่เป็นเบราว์เซอร์สามารถส่ง protocol ping ไปยังเบราว์เซอร์ได้ แต่โค้ด *client* ที่เป็นเบราว์เซอร์ไม่สามารถส่งหรือสังเกตมันได้ ดังนั้นในทางปฏิบัติ:
+
+- **Server ไปยังเบราว์เซอร์:** server อาจใช้ protocol ping/pong จริงเพื่อตรวจสอบเบราว์เซอร์
+- **เบราว์เซอร์ไปยัง server:** client ต้องใช้ข้อความ app-level เพราะนั่นคือทั้งหมดที่มันมองเห็น
+
+ดังนั้นระบบ production ส่วนใหญ่จึงรัน heartbeat แบบ **app-level** เพื่อให้ logic เดียวกันทำงานได้บนทุกแพลตฟอร์ม นั่นคือสิ่งที่เราจะสร้างด้านล่าง
+
+## The heartbeat loop
+
+รูปแบบของ app-level heartbeat มักจะเหมือนกันเสมอ:
+
+<Mermaid title="ลูปของ app-level heartbeat" code={heartbeatDiagram} />
+
+export const heartbeatDiagram = `sequenceDiagram
+  participant C as Client
+  participant S as Server
+  loop every interval
+    C->>S: ping
+    S-->>C: pong
+    Note over C: pong seen — mark connection healthy
+  end`;
+
+ในโค้ด มันคือ interval timer บวกกับ state ชิ้นเล็ก ๆ: ส่ง ping ทุก N วินาที และจำว่า pong ที่ตรงกันกลับมาหรือยัง นี่คือหัวใจของมันในรูปแบบ TypeScript ธรรมดา:
+
+```ts
+const HEARTBEAT_MS = 5000;
+
+function startHeartbeat(ws: WebSocket) {
+  const timer = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'ping', t: Date.now() }));
+  }, HEARTBEAT_MS);
+
+  ws.addEventListener('message', (event) => {
+    const msg = JSON.parse(event.data as string);
+    if (msg.type === 'pong') {
+      // The connection answered — it is genuinely alive right now.
+    }
+  });
+
+  ws.addEventListener('close', () => clearInterval(timer));
+}
+```
+
+การส่ง ping คือครึ่งที่ง่าย ครึ่งที่มีค่า — *การสังเกตว่า pong ไม่เคยมา* — คือบทเรียนถัดไปทั้งบท สำหรับตอนนี้ ให้โฟกัสที่จังหวะ: ชีพจรที่สม่ำเสมอ และคำตอบสำหรับทุกครั้งที่เต้น
+
+## ping/pong แบบสด
+
+เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง mock เล่นบทเป็น server ที่ประพฤติดี: ทุกครั้งที่มันรับข้อความ `ping` แบบ app-level มันจะตอบด้วย `pong` client ส่ง ping ทุกหนึ่งวินาทีและ log การไปกลับ ดู heartbeat ลงตัวเข้าสู่จังหวะของมัน
+
+export const pingPongCode = `(function () {
+  // In-page socket with the real WebSocket API. The mock acts as a healthy
+  // server: it answers every app-level {type:'ping'} with a {type:'pong'}.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  class HeartbeatSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 30);
+    }
+    send(data) {
+      const msg = JSON.parse(data);
+      if (msg.type === 'ping') {
+        // Healthy server: reply with a pong echoing the sequence number.
+        setTimeout(() => {
+          if (this.onmessage) this.onmessage({ data: JSON.stringify({ type: 'pong', seq: msg.seq }) });
+        }, 20);
+      }
+    }
+    close(code) { this.readyState = 3; if (this.onclose) this.onclose({ code: code || 1000 }); }
+  }
+
+  const ws = new HeartbeatSocket();
+  let seq = 0;
+  let timer = null;
+  ws.onopen = () => {
+    console.log('open — starting heartbeat (1 ping/sec)');
+    timer = setInterval(() => {
+      if (ws.readyState !== 1) return;
+      seq += 1;
+      console.log('-> ping #' + seq);
+      ws.send(JSON.stringify({ type: 'ping', seq: seq }));
+    }, 1000);
+  };
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'pong') {
+      console.log('<- pong #' + msg.seq + ' — connection is alive');
+      if (msg.seq === 3) { clearInterval(timer); console.log('demo done — stopping heartbeat'); ws.close(); }
+    }
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={pingPongCode} />
+
+คุณจะเห็น ping ออกไปและ pong กลับมา หนึ่งคู่ต่อวินาที ทุก pong ที่กลับมาคือหลักฐานชัดเจนว่า connection ยังมีชีวิต *ในขณะนั้น* — ไม่ใช่เมื่อสามสิบวินาทีที่แล้ว ไม่ใช่ "น่าจะ" นั่นคือจุดประสงค์ทั้งหมดของ heartbeat: มันเปลี่ยนความเงียบ ซึ่งไม่บอกอะไรคุณเลย ให้กลายเป็นสัญญาณที่สม่ำเสมอซึ่งคุณเชื่อถือได้จริง
+
+<Callout title="Heartbeat ในหนึ่งบรรทัด">
+Heartbeat คือ traffic ที่จงใจส่งบน timer Protocol ping/pong frame มีอยู่จริงแต่มองไม่เห็นจากโค้ด client ที่เป็นเบราว์เซอร์ ดังนั้นแอปจึงส่งข้อความ ping/pong แบบ **app-level** — เปลี่ยนความเงียบที่กำกวมให้กลายเป็นหลักฐานว่า connection ยังหายใจอยู่
+</Callout>
+
+export const quizHeartbeats = [
+  {
+    q: 'ทำไม WebSocket ที่ idle ถึงดูเหมือนยังมีชีวิตทั้งที่จริง ๆ แล้วตายไปแล้ว?',
+    options: [
+      'เบราว์เซอร์ซ่อน error ทั้งหมดอย่างตั้งใจ',
+      'เมื่อไม่มี traffic TCP จะไม่เคยพยายามส่ง จึงไม่เคยค้นพบการพัง — และ OS keepalive อาจใช้เวลาเป็นชั่วโมง',
+      'WebSocket ปิดการใช้งาน TCP ทั้งหมด',
+      'Dead connection จะ throw exception ทันทีเสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม client ที่เป็นเบราว์เซอร์มักใช้ app-level heartbeat แทน protocol ping/pong frame?',
+    options: [
+      'Protocol frame ช้ากว่า',
+      'WebSocket API ของเบราว์เซอร์ไม่สามารถส่ง protocol ping หรือสังเกต pong ได้ ดังนั้นโค้ด client จึงใช้ข้อความธรรมดา',
+      'App-level heartbeat ถูกบังคับโดย TCP',
+      'Protocol frame ทำงานได้บน plain HTTP เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในเดโม แต่ละ pong ที่กลับมาพิสูจน์อะไร?',
+    options: [
+      'ว่า server จะไม่มีวัน disconnect',
+      'ว่า connection ยังมีชีวิตในขณะนั้น เปลี่ยนความเงียบให้กลายเป็นสัญญาณที่เชื่อถือได้',
+      'ว่าข้อความถูกเข้ารหัสแล้ว',
+      'ไม่มีอะไรเลย — pong เป็นแค่ของตกแต่ง',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/heartbeats" questions={quizHeartbeats} />
+
+<ProgressTracker client:visible id="connection-lifecycle/heartbeats" />

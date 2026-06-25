@@ -1,0 +1,165 @@
+---
+title: 'Sending and Receiving'
+description: 'How to send with ws.send(), receive via the message event and event.data, message ordering, and the rule that you can only send when OPEN — with a live demo.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Once a connection is `OPEN`, the day-to-day work is just two things: pushing messages out with `send()` and reacting to messages coming in through the `message` event. This lesson nails down both directions, plus the two rules that trip people up most — *when* you may send, and *what order* things arrive.
+
+## Sending with ws.send()
+
+To send, you call `send()` with your payload:
+
+```ts
+ws.send('hello, server');
+ws.send(JSON.stringify({ type: 'chat', text: 'hi' }));
+```
+
+`send()` accepts a string or binary data (we cover binary in the next lesson). It does **not** return a value and gives you no acknowledgement — it simply hands the message to the connection. A common pattern is to send structured data by serializing an object to JSON, then parsing it on the other end.
+
+## Receiving via the message event
+
+Incoming messages arrive as `message` events, and the payload is always on `event.data`:
+
+```ts
+ws.onmessage = (event) => {
+  const data = event.data;          // a string (or binary, next lesson)
+  const msg = JSON.parse(data);     // if the peer sent JSON
+  console.log(msg.type, msg.text);
+};
+```
+
+`event.data` is the *only* place the payload lives. If you sent JSON, you parse it here; if you sent plain text, you use it directly. The handler runs once per message and may fire as often as the server has things to say.
+
+## You can only send when OPEN
+
+This is the single rule worth tattooing on your memory: **`send()` is only valid while `readyState` is `OPEN`.**
+
+- Call `send()` while still `CONNECTING` and it throws an `InvalidStateError` — the connection is not ready.
+- Call `send()` after `CLOSING` or `CLOSED` and the data is silently dropped; it never reaches the peer.
+
+So the safe pattern is to send from inside `onopen`, or to guard every call:
+
+```ts
+function safeSend(ws: WebSocket, data: string) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(data);
+  } else {
+    console.warn('not open — dropping or queuing message');
+  }
+}
+```
+
+## Ordering is guaranteed
+
+A WebSocket runs over a single TCP connection, and that buys you a strong, simple guarantee: **messages are delivered in the order you sent them.** If you call `send('a')` then `send('b')` then `send('c')`, the peer receives `a`, `b`, `c` — never reordered, never duplicated. The same holds for messages the server sends to you.
+
+<Mermaid title="Sends and the message events they trigger, in order" code={ioDiagram} />
+
+export const ioDiagram = `sequenceDiagram
+  participant App as Your code
+  participant WS as WebSocket
+  participant Srv as Server
+  Note over WS: readyState = OPEN
+  App->>WS: send("a")
+  App->>WS: send("b")
+  WS->>Srv: a
+  WS->>Srv: b
+  Srv-->>WS: reply to a
+  WS-->>App: message event (data = reply to a)
+  Srv-->>WS: reply to b
+  WS-->>App: message event (data = reply to b)`;
+
+What ordering does *not* promise is a request/response pairing. A WebSocket has no built-in notion of "this reply belongs to that send" — if you need that, you add your own correlation id inside the message. Ordering, yes; matching, that is your job.
+
+## Send and receive, live
+
+The demo uses an in-page echo socket with the real `WebSocket` API, so it runs anywhere with no server. It sends three messages in a row from inside `onopen` and prints each echo as it returns — in order. In a real app only the first line would change to `new WebSocket('wss://your-server')`.
+
+export const sendRecvCode = `(function () {
+  // In-page echo socket with the same API as a real WebSocket.
+  // In a real app: const ws = new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.OPEN = 1;
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) {
+      if (this.readyState !== 1) { console.log('blocked send — not OPEN'); return; }
+      setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50);
+    }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  // Proof of the rule: this send happens while still CONNECTING and is blocked.
+  ws.send('too early');
+
+  let received = 0;
+  ws.onopen = () => {
+    console.log('open — sending three messages in order');
+    ws.send(JSON.stringify({ n: 1 }));
+    ws.send(JSON.stringify({ n: 2 }));
+    ws.send(JSON.stringify({ n: 3 }));
+  };
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    console.log('received message number', msg.n);
+    received += 1;
+    if (received === 3) ws.close();
+  };
+  ws.onclose = (event) => console.log('closed, code', event.code);
+})();`;
+
+<NodeRunner client:visible code={sendRecvCode} />
+
+Notice the first attempt — `too early` — is blocked because the socket is still `CONNECTING`. Then, once open, the three numbered messages come back as `1`, `2`, `3`, in exactly the order they were sent. That is `send()`, the `message` event, the OPEN-only rule, and ordering, all in one run.
+
+<Callout title="The two directions, three rules">
+Send with `ws.send(data)`; receive on `event.data` inside `onmessage`. You may only send while `OPEN` (sending earlier throws, later is dropped), delivery preserves send order over the single TCP connection, but the API never pairs replies to requests — add your own correlation id if you need that.
+</Callout>
+
+export const quizSendRecv = [
+  {
+    q: 'Where does the payload of an incoming message live?',
+    options: [
+      'event.payload',
+      'event.data',
+      'event.message',
+      'ws.lastMessage',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What happens if you call send() while the socket is still CONNECTING?',
+    options: [
+      'The message is queued and sent automatically on open',
+      'It throws an InvalidStateError',
+      'It opens the connection faster',
+      'Nothing — it is always safe',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which guarantee does a WebSocket provide for messages?',
+    options: [
+      'Each send gets a matching response',
+      'Messages may arrive in any order for speed',
+      'Messages are delivered in the order they were sent',
+      'Duplicate delivery to improve reliability',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="the-client-api/sending-and-receiving" questions={quizSendRecv} />
+
+<ProgressTracker client:visible id="the-client-api/sending-and-receiving" />

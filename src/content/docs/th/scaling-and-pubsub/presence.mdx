@@ -1,0 +1,146 @@
+---
+title: 'Presence ข้าม Instance'
+description: 'การติดตามว่าใครออนไลน์อยู่เมื่อ online กระจายอยู่ตามเครื่องต่าง ๆ: shared store, heartbeat, การหมดอายุ, event การ join และ leave และ reconnect stampede'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+"ตอนนี้ใครออนไลน์อยู่บ้าง?" ฟังดูเป็นคำถามที่ตอบง่าย ๆ บน instance เดียวมันเกือบจะง่ายจริง — คุณแค่อ่าน `connections` map ของคุณ แต่ข้ามหลาย instance การออนไลน์นั้น*กระจัดกระจาย*: แต่ละเครื่องรู้แค่ client ของตัวเอง และคุณได้ทราบจากบทเรียน broadcast แล้วว่าไม่มี instance ใดอ่าน memory ของอีกตัวได้ presence คือปัญหา cross-instance เดิมที่สวมหมวกใบใหม่ และมันเพิ่มจุดยุ่งยากที่น่ารำคาญเข้ามา: ผู้คนหายตัวไปโดยไม่บอกกล่าว
+
+## การออนไลน์ไม่ใช่ข้อเท็จจริงระดับ local อีกต่อไป
+
+คำตอบแบบไร้เดียงสา — "นับ socket ที่เชื่อมต่อกับฉัน" — ให้มุมมองที่บางส่วนและผิดแก่แต่ละ instance รายชื่อผู้ใช้บน instance A ขาดทุกคนบน instance B ดังนั้น presence จึงต้องอยู่ในที่ที่*ทุก* instance อ่านและเขียนได้: **shared store** ซึ่งโดยทั่วไปคือ Redis
+
+รูปแบบคือ key หนึ่งตัวต่อผู้ใช้หนึ่งคน (หรือ set ของ online user id) ที่ทุก instance อัปเดตเมื่อ client เข้ามาและจากไป
+
+```ts
+// A shared store every instance can read and write (e.g. Redis).
+// `store` stands in for a Redis client here.
+
+async function markOnline(userId: string) {
+  // Record presence with a short expiry — see heartbeats below.
+  await store.set('presence:' + userId, '1', { expireSeconds: 30 });
+}
+
+async function isOnline(userId: string): Promise<boolean> {
+  return (await store.get('presence:' + userId)) !== null;
+}
+```
+
+## คุณไว้ใจให้ client บอกลาไม่ได้
+
+`close` frame ที่สะอาดตอน logout คือเส้นทางในอุดมคติ แต่โลกความเป็นจริงนั้นยุ่งเหยิงกว่านั้น: แล็ปท็อปเข้าโหมด sleep, โทรศัพท์สัญญาณหลุด, tunnel ล่ม ในทุกกรณีเหล่านั้น socket ตาย*เงียบ ๆ* — server ของคุณอาจเก็บ object ของ connection ที่ตายแล้วไว้นาน และ shared store ก็จะรายงานผีว่า "ออนไลน์" อย่างยินดี
+
+ทางแก้คืออย่าปฏิบัติต่อ presence ว่าเป็นสิ่งถาวร มีกลไกสองอย่างที่ทำงานร่วมกัน:
+
+- **Heartbeat** client (หรือ server) ส่ง ping เป็นระยะ แต่ละ heartbeat *รีเฟรช* presence key โดยดันการหมดอายุของมันออกไปในอนาคต
+- **การหมดอายุ** presence key มี TTL สั้น ๆ — สมมติ 30 วินาที ถ้า heartbeat ยังมาถึงเรื่อย ๆ มันก็ไม่มีวันหมดอายุ ถ้า client หายไป heartbeat หยุด key หมดอายุไปเอง และผู้ใช้ก็ตกออฟไลน์โดยอัตโนมัติ ไม่ต้องบอกลา
+
+นี่คือแนวคิดหลัก: **presence หมดอายุโดยค่าเริ่มต้นและถูกทำให้มีชีวิตอยู่ด้วยกิจกรรม** แทนที่จะถูกตั้งค่าอย่างชัดเจนและถูกล้างอย่างชัดเจน การ crash เพียงแค่หยุดการรีเฟรช
+
+<Mermaid title="heartbeat รีเฟรช presence key ที่มีอายุสั้น ความเงียบปล่อยให้มันหมดอายุ" code={heartbeatDiagram} />
+
+export const heartbeatDiagram = `sequenceDiagram
+  participant C as Client
+  participant I as Instance
+  participant S as Shared store (TTL 30s)
+  C->>I: connect
+  I->>S: SET presence:u1, TTL 30s
+  loop every 10s while alive
+    C->>I: heartbeat (ping)
+    I->>S: refresh TTL -> 30s
+  end
+  Note over C,I: laptop sleeps — socket dies silently
+  Note over S: no refresh arrives
+  S-->>S: key expires after 30s -> u1 offline`;
+
+## event การ join และ leave
+
+presence ไม่ใช่แค่รายการที่คุณ query เท่านั้น ผู้คนอยาก*เห็น*การเปลี่ยนแปลง — "Sam เข้าร่วม", "Dana ออกไป" event เหล่านั้นวิ่งบน backplane เดียวกันจากบทเรียนก่อนหน้า
+
+เมื่อ shared store เปลี่ยนสถานะผู้ใช้ระหว่างออนไลน์และออฟไลน์ instance จะ publish presence event ไปยัง channel และทุก instance ก็ fan-out มันไปยัง client ภายในของมัน — เหมือนข้อความแชทเป๊ะ ๆ
+
+```ts
+// On a real connect (the store had no key before):
+async function onConnect(userId: string) {
+  const wasOffline = !(await isOnline(userId));
+  await markOnline(userId);
+  if (wasOffline) {
+    bus.publish('presence:events', JSON.stringify({ type: 'join', userId }));
+  }
+}
+
+// Leave events come from expiry or a clean close, published the same way:
+//   bus.publish('presence:events', JSON.stringify({ type: 'leave', userId }))
+```
+
+การเช็ค `wasOffline` มีความสำคัญ: ผู้ใช้ที่มีสองแท็บควรยิง join **ครั้งเดียว** ไม่ใช่สองครั้ง การนับจำนวน connection ต่อผู้ใช้ (counter เล็ก ๆ ใน store) ช่วยให้ join/leave ซื่อสัตย์เมื่อคนคนเดียวกันถือ socket หลายตัว
+
+## reconnect stampede (thundering herd)
+
+ตอนนี้มาถึงจุดยุ่งยากที่ทำให้ทีมตั้งตัวไม่ทัน เมื่อ instance restart — ตอน deploy, crash, หรือ autoscaler scale in — client *ทุกตัว* ที่มันถือไว้จะหลุดในวินาทีเดียวกันและ reconnect ภายในหนึ่งหรือสองวินาที การ reconnect พร้อมกันหลายพันครั้งหมายถึง:
+
+- handshake และ auth check ใหม่พุ่งขึ้นบน instance ที่รอดมาได้
+- presence write และ join event พุ่งเข้าชน shared store พร้อมกันทั้งหมด
+- อาจเกิด cascade: instance ที่รอดมาทรุดลงภายใต้แรงพุ่ง และตัด client *ของมัน* ออก ซึ่งก็ reconnect ต่อ และเป็นแบบนี้ไปเรื่อย ๆ
+
+นี่คือ **thundering herd** การป้องกันคือการ*กระจายฝูงออกไปตามเวลา*:
+
+- **jittered reconnect backoff** client รอ delay แบบ*สุ่ม*ก่อน reconnect (เช่น 0–5 วินาที จากนั้นโตแบบ exponential) เพื่อไม่ให้พวกมันกลับมาพร้อมกันใน tick เดียวกัน
+- **connection rate limiting** ที่ server หรือ balancer เพื่อจำกัดความเร็วในการรับ socket ใหม่
+- **coalesced presence writes** จับกลุ่มหรือ debounce กระแสน้ำของ presence update แทนที่จะ round-trip หนึ่งครั้งต่อ reconnect
+
+<Mermaid title="การ restart กระตุ้นให้เกิด reconnect ที่ synchronized กัน jitter ช่วยกระจายมันออกไป" code={stampedeDiagram} />
+
+export const stampedeDiagram = `flowchart TB
+  R["Instance restarts"] --> D["All its clients drop at once"]
+  D --> Q{"Reconnect strategy?"}
+  Q -- "immediate (no jitter)" --> H["Synchronized stampede -> store + survivors overload"]
+  Q -- "random jittered backoff" --> S["Reconnects spread over time -> smooth recovery"]`;
+
+<Callout title="Presence ในสามกฎ">
+เก็บ presence ไว้ใน shared store เพื่อให้ทุก instance เห็นตรงกันว่าใครออนไลน์ ทำให้มันหมดอายุโดยค่าเริ่มต้นและรีเฟรชด้วย heartbeat เพื่อให้การตายอย่างเงียบ ๆ ทำความสะอาดตัวเอง และ publish join/leave ผ่าน backplane จากนั้นเพิ่ม reconnect jitter เข้าไป เพราะในวินาทีที่ instance ตาย ผู้ใช้ทั้งหมดของมันก็มาเคาะประตูพร้อมกัน
+</Callout>
+
+export const quizPresence = [
+  {
+    q: 'ทำไม presence key จึงใช้ TTL สั้น ๆ ที่รีเฟรชด้วย heartbeat แทนที่จะตั้งค่าครั้งเดียวแล้วล้างตอน logout?',
+    options: [
+      'TTL ทำให้ Redis เร็วขึ้น',
+      'client มักตายอย่างเงียบ ๆ ดังนั้น key ที่หมดอายุโดยค่าเริ่มต้นจึงลบผีออกโดยอัตโนมัติ',
+      'heartbeat เข้ารหัสข้อมูล presence',
+      'มันช่วยเลี่ยงการใช้ backplane',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมจึงต้องเช็คว่าผู้ใช้เคยออฟไลน์มาก่อนหรือไม่ ก่อนที่จะยิง join event?',
+    options: [
+      'เพื่อเข้ารหัส join event',
+      'เพื่อให้ผู้ใช้ที่เปิดแท็บที่สองยิง join ครั้งเดียว ไม่ใช่ซ้ำ',
+      'เพราะ join ต้องถูกเขียนลง Kafka',
+      'เพื่อทำให้ reconnect ช้าลง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'อะไรคือการป้องกัน reconnect thundering herd ที่มีประสิทธิภาพที่สุด?',
+    options: [
+      'reconnect ทันทีเพื่อให้ผู้ใช้กลับมาเร็ว',
+      'ปิด heartbeat ระหว่างการ restart',
+      'random jittered backoff เพื่อให้ client reconnect ในเวลาที่เหลื่อมกัน',
+      'เก็บ presence ไว้ใน local memory เท่านั้น',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="scaling-and-pubsub/presence" questions={quizPresence} />
+
+<ProgressTracker client:visible id="scaling-and-pubsub/presence" />

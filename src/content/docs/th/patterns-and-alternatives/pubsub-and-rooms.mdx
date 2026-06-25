@@ -1,0 +1,165 @@
+---
+title: 'Pub/Sub and Rooms'
+description: 'subscribe เข้า topic แล้วรับเฉพาะสิ่งที่คุณขอ — pattern แบบ publish/subscribe และ rooms ที่ขับเคลื่อนแอป real-time ส่วนใหญ่ พร้อม demo สด'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+WebSocket ให้ท่อหนึ่งท่อไปยังแต่ละ client สิ่งที่ทำแบบไร้เดียงสาที่สุดกับท่อนั้นคือ ดัน *ทุกอย่าง* ลงไปแล้วปล่อยให้ client คัดเองว่าตัวเองสนใจอะไร นั่นใช้ได้กับ demo หนึ่งตัวเป๊ะ ๆ แล้วก็พังทันที: แอปที่มีงานเยอะมี event หลายพันรายการต่อวินาที และผู้ใช้คนเดียวต้องการเพียงเศษเสี้ยวเล็กจิ๋วเท่านั้น **Publish/subscribe** คือ pattern ที่แก้ปัญหานี้ และมันคือกระดูกสันหลังของผลิตภัณฑ์ real-time แทบทุกตัวที่คุณเคยใช้
+
+## แนวคิดหลัก
+
+Pub/sub แบ่งโลกออกเป็น **topic** (เรียกอีกอย่างว่า channel หรือ room) และสามบทบาท:
+
+- **Subscriber** บอกเซิร์ฟเวอร์ว่า *ตัวเองสนใจ topic ใดบ้าง* — `room:general`, `prices:BTC`, `doc:42`
+- **Publisher** ส่ง message *ไปยัง topic* โดยไม่รู้และไม่สนใจว่าใครกำลังฟังอยู่
+- **Broker** (เซิร์ฟเวอร์ของคุณ) เก็บแผนที่ว่า "ใคร subscribe อะไรบ้าง" และเมื่อ message มาถึงสำหรับ topic หนึ่ง มันจะส่งให้เฉพาะ subscriber ของ topic นั้นเท่านั้น
+
+การแยกออกจากกัน (decoupling) คือแก่นของเรื่องทั้งหมด publisher ไม่เคยระบุถึงตัวบุคคล มันระบุถึง topic subscriber ไม่เคยเอ่ยชื่อผู้ส่ง มันเอ่ยถึงความสนใจ เพิ่มหรือลบฝั่งใดฝั่งหนึ่งแล้วอย่างอื่นก็ไม่เปลี่ยนแปลง
+
+<Mermaid title="การ publish หนึ่งครั้งไปยัง topic จะกระจายออกไปเฉพาะ subscriber ของ topic นั้น" code={pubsubDiagram} />
+
+export const pubsubDiagram = `flowchart LR
+  pub["publisher<br/>sends to 'room:general'"] --> broker["broker<br/>(topic → subscribers map)"]
+  broker -- "room:general" --> a["client A<br/>subs: room:general"]
+  broker -- "room:general" --> b["client B<br/>subs: room:general"]
+  broker -. "not subscribed" .-x c["client C<br/>subs: prices:BTC"]`;
+
+client C ไม่เคยได้ยิน message `room:general` — ไม่ใช่เพราะมันถูกกรองที่ฝั่ง client แต่เป็นเพราะ broker ไม่เคยส่งมันออกไป ความแตกต่างนี้สำคัญ: การกรองที่ฝั่ง client ยังต้องจ่ายทั้ง bandwidth และต้นทุนการปลุกเครื่องสำหรับทุก event Pub/sub ของจริงกรองที่ต้นทาง
+
+## Room ก็คือ topic นั่นเอง
+
+"Room" และ "channel" ไม่ใช่กลไกที่ต่างกัน — มันเป็นเพียงชื่อที่เป็นมิตรของ topic ที่ขอบเขตอยู่กับกลุ่มหนึ่ง `room:general` คือ topic เช่นเดียวกับ `room:swe-team` การเข้าร่วม room คือการ subscribe การออกคือการ unsubscribe เครื่องจักรชุดเดียวกันรองรับทั้งห้องแชต เซสชันทำงานร่วมกันต่อเอกสาร และ feed ราคาต่อสัญลักษณ์ เมื่อคุณมีแกน subscribe/publish ที่สะอาดแล้ว "room" ไม่ทำให้คุณเสียอะไรเพิ่ม
+
+## รูปร่างของ message สำหรับมัน
+
+Pub/sub ต้องการคำศัพท์เพียงเล็กน้อยบนสาย ฟิลด์ `type` บวกกับ `topic` ก็เพียงพอที่จะรองรับทุก operation:
+
+```ts
+type PubSubMessage =
+  | { type: 'subscribe'; topic: string }
+  | { type: 'unsubscribe'; topic: string }
+  | { type: 'publish'; topic: string; data: unknown }
+  // server -> client delivery
+  | { type: 'message'; topic: string; data: unknown };
+```
+
+สามอันแรกคือคำสั่งที่ client ส่ง อันสุดท้ายคือสิ่งที่เซิร์ฟเวอร์ส่งกลับมาเมื่อ event ตรงกับ subscription ของคุณตัวใดตัวหนึ่ง นั่นคือ protocol ทั้งหมด — ที่เหลือคือการจดบัญชีภายใน broker
+
+## ดูมันทำงานสด ๆ
+
+demo ด้านล่างคือ broker pub/sub ที่สมบูรณ์ในหน้านี้ ต่อสายเข้ากับ client จำลองสองตัวผ่าน WebSocket API จริง client A subscribe `room:general` ส่วน client B subscribe `prices:BTC` จากนั้นเรา publish ไปยังแต่ละ topic แล้วดูว่ามีเพียง client ที่ถูกต้องเท่านั้นที่ได้รับแต่ละ message รันมันแล้วอ่าน log: ทุกการส่งลงไปที่ subscriber เพียงตัวเดียวเป๊ะ ๆ ไม่เคยลงทั้งสองตัว
+
+export const pubsubDemoCode = `(function () {
+  // A tiny in-page pub/sub broker. Each client is a mock socket with the real
+  // WebSocket API (send/onmessage). In a real app the broker lives on the server
+  // and each socket is: const ws = new WebSocket('wss://your-server').
+  class BrokerSocket {
+    constructor(broker, name) {
+      this.broker = broker;
+      this.name = name;
+      this.readyState = 1;
+      broker._register(this);
+    }
+    send(raw) { this.broker._handle(this, raw); }   // client -> server
+    _deliver(raw) { if (this.onmessage) this.onmessage({ data: raw }); } // server -> client
+  }
+
+  class Broker {
+    constructor() { this.subs = new Map(); }        // topic -> Set<socket>
+    _register(sock) {}
+    _handle(sock, raw) {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'subscribe') {
+        if (!this.subs.has(msg.topic)) this.subs.set(msg.topic, new Set());
+        this.subs.get(msg.topic).add(sock);
+        console.log(sock.name, 'subscribed to', msg.topic);
+      } else if (msg.type === 'unsubscribe') {
+        const set = this.subs.get(msg.topic);
+        if (set) set.delete(sock);
+      } else if (msg.type === 'publish') {
+        const set = this.subs.get(msg.topic);
+        const count = set ? set.size : 0;
+        console.log('publish to', msg.topic, '-> delivering to', count, 'subscriber(s)');
+        if (set) {
+          for (const target of set) {
+            target._deliver(JSON.stringify({ type: 'message', topic: msg.topic, data: msg.data }));
+          }
+        }
+      }
+    }
+  }
+
+  const broker = new Broker();
+  const a = new BrokerSocket(broker, 'client A');
+  const b = new BrokerSocket(broker, 'client B');
+
+  a.onmessage = (e) => { const m = JSON.parse(e.data); console.log('  client A received', m.topic, '->', JSON.stringify(m.data)); };
+  b.onmessage = (e) => { const m = JSON.parse(e.data); console.log('  client B received', m.topic, '->', JSON.stringify(m.data)); };
+
+  // Each client subscribes to a different topic.
+  a.send(JSON.stringify({ type: 'subscribe', topic: 'room:general' }));
+  b.send(JSON.stringify({ type: 'subscribe', topic: 'prices:BTC' }));
+
+  // Publish to each topic; only the matching subscriber should hear it.
+  a.send(JSON.stringify({ type: 'publish', topic: 'room:general', data: { from: 'A', text: 'hi everyone' } }));
+  b.send(JSON.stringify({ type: 'publish', topic: 'prices:BTC', data: { price: 68000 } }));
+
+  // Publish to a topic with no subscribers — delivered to nobody.
+  a.send(JSON.stringify({ type: 'publish', topic: 'room:empty', data: { text: 'anyone there?' } }));
+})();`;
+
+<NodeRunner client:visible code={pubsubDemoCode} />
+
+อ่าน output จากบนลงล่าง: A ได้ยินเฉพาะ `room:general` B ได้ยินเฉพาะ `prices:BTC` และการ publish ไปยัง `room:empty` ถูกส่งให้ subscriber ศูนย์ราย แล้วถูกทิ้งไปเงียบ ๆ บรรทัดสุดท้ายนั้นสำคัญ — การ publish ไปยัง topic ที่ไม่มีใครต้องการคือ no-op ซึ่งนี่แหละคือสิ่งที่ทำให้ publisher ปล่อย message ได้อย่างอิสระโดยไม่ต้องรู้จักผู้ฟัง
+
+## ทำไมมันถึงสเกลได้
+
+broker ถือ `Map` จาก topic ไปยัง set ของ socket การส่ง event แตะเฉพาะ socket ใน set เดียวเท่านั้น ไม่เคยแตะตารางการเชื่อมต่อทั้งหมด นั่นคือเหตุผลที่ pub/sub สเกลตาม *ความสนใจ* แทนที่จะตาม *จำนวนการเชื่อมต่อทั้งหมด*: แอปที่มีผู้ใช้แสนคนซึ่งแต่ละคนดูสาม topic ก็ยังส่งแต่ละ event ให้แค่ไม่กี่คนที่ขอ และเมื่อต่อมาคุณรันเซิร์ฟเวอร์หลาย instance โมเดลเดียวกันก็ขยายออกไปได้ — broker ที่ใช้ร่วมกัน (Redis, NATS, message bus) กระจายการ publish ข้าม instance ซึ่งก็คือ [pattern การสเกล](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/) ที่คุณเห็นมาก่อนหน้านี้เป๊ะ ๆ
+
+<Callout title="subscribe ก่อน แล้วรับเฉพาะอันนั้น">
+Pub/sub เปลี่ยนท่อหนึ่งท่อให้เป็น stream ที่ปรับเฉพาะตัวหลายสาย client **subscribe** เข้า topic publisher ส่ง **ไปยัง topic** ไม่ใช่ไปยังตัวบุคคล broker ส่งแต่ละ event เฉพาะให้ subscriber ของ topic นั้นเท่านั้น Room และ channel ก็เป็นเพียง topic ที่มีชื่อเป็นมิตรกว่า — เครื่องจักรเดียวกันอยู่ใต้ฝากระโปรง
+</Callout>
+
+export const quizPubSub = [
+  {
+    q: 'ใน pub/sub publisher ระบุถึงใครเมื่อส่ง message?',
+    options: [
+      'client ที่เฉพาะเจาะจงด้วย connection id',
+      'topic หนึ่ง โดยไม่รู้ว่าใคร subscribe อยู่',
+      'ทุก client ที่เชื่อมต่ออยู่พร้อมกันในคราวเดียว',
+      'ตัว broker เอง ซึ่งตัดสินใจแบบสุ่ม',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมการกรองที่ฝั่ง broker ถึงดีกว่าการปล่อยให้ทุก client รับทุกอย่างแล้วกรองเองในเครื่อง?',
+    options: [
+      'การกรองที่ฝั่ง client เป็นไปไม่ได้ใน JavaScript',
+      'มันหลีกเลี่ยงการจ่าย bandwidth และต้นทุนการปลุกเครื่องสำหรับ event ที่ client ไม่ต้องการ',
+      'มันเข้ารหัส message ให้อัตโนมัติ',
+      'มันรับประกันลำดับของ message',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน demo เกิดอะไรขึ้นเมื่อ message ถูก publish ไปยัง topic ที่ไม่มี subscriber?',
+    options: [
+      'มันถูก broadcast ไปยังทุก client เป็น fallback',
+      'มันโยน error และปิดการเชื่อมต่อ',
+      'มันถูกส่งให้ subscriber ศูนย์รายแล้วถูกทิ้ง',
+      'มันถูกเข้าคิวจนกว่าจะมีคน subscribe',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="patterns-and-alternatives/pubsub-and-rooms" questions={quizPubSub} />
+
+<ProgressTracker client:visible id="patterns-and-alternatives/pubsub-and-rooms" />

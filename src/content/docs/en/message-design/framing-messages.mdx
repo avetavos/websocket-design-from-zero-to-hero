@@ -1,0 +1,137 @@
+---
+title: 'Framing Messages'
+description: 'WebSocket messages arrive whole and discrete, unlike a raw TCP byte stream — but you still need an application protocol. The one-JSON-object-per-message rule, with a live demo.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+There is a subtle gift the WebSocket protocol gives you, and a subtle trap right next to it. The gift is that **messages arrive whole**. The trap is believing that whole means *meaningful*. This lesson is about the gap between the two.
+
+## Raw TCP has no messages — WebSocket does
+
+If you have ever written code against a raw TCP socket, you know the pain: TCP is a **byte stream**. You might call `send('{"a":1}')` once on one side, but the other side could receive `'{"a'` then `':1}'`, or both in one chunk glued to the next message. There are no boundaries. You have to invent **framing** yourself — length prefixes, delimiters, something — to know where one message ends and the next begins.
+
+WebSocket already solved that for you. The protocol frames the stream at the wire level, so `onmessage` fires **once per message you sent**, with the whole payload intact. One `send` on one end becomes exactly one `onmessage` on the other.
+
+<Mermaid title="Raw TCP delivers a stream; WebSocket delivers discrete messages" code={framingDiagram} />
+
+export const framingDiagram = `flowchart TB
+  subgraph tcp["Raw TCP — a byte stream"]
+    direction LR
+    t1["send A · send B"] --> t2["recv: A+par<br/>recv: t of B"]
+    t2 --> t3["YOU must reframe"]
+  end
+  subgraph wsf["WebSocket — discrete messages"]
+    direction LR
+    w1["send A · send B"] --> w2["onmessage: A<br/>onmessage: B"]
+    w2 --> w3["boundaries already correct"]
+  end`;
+
+So the low-level framing problem — *where does a message end* — is gone. Wonderful. But that only tells you the **bytes** are grouped correctly. It says nothing about what those grouped bytes *mean*.
+
+## You still need an application protocol
+
+Here is the trap. Because messages arrive whole, it is tempting to just `send('user joined: bob')` and call it done. It works — for exactly one kind of message. The instant you have a second kind ("user left", "new message", "typing…"), your receiver is reduced to fragile string-sniffing: *does it start with "user joined"? does it contain a colon?* That is a parser you are accidentally writing by hand, badly.
+
+The discipline that scales is simple and worth committing to memory:
+
+- **One JSON object per WebSocket message.** Never pack two logical messages into one `send`, and never split one logical message across several.
+- **Every message has a `type` field.** The receiver branches on `type`, not on string shape.
+- **The payload lives in named fields**, so adding data later never breaks existing parsing.
+
+This is your *application-level framing*: the WebSocket frames the bytes; your `type` field frames the *meaning*.
+
+## A structured-message demo
+
+The demo sends three different *kinds* of message over one connection. Each is a single JSON object with a `type`, and the receiver dispatches on that type — no string-sniffing anywhere. It runs in your browser on an in-page echo socket using the real `WebSocket` API.
+
+export const framingCode = `(function () {
+  // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 40); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+
+  // Helper: always one JSON object per send.
+  function emit(type, payload) {
+    ws.send(JSON.stringify(Object.assign({ type: type }, payload)));
+  }
+
+  let seen = 0;
+  ws.onopen = () => {
+    emit('join', { user: 'bob' });
+    emit('chat', { user: 'bob', text: 'hi everyone' });
+    emit('typing', { user: 'bob' });
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    // Dispatch on type — never on string shape.
+    if (msg.type === 'join') console.log(msg.user, 'joined the room');
+    else if (msg.type === 'chat') console.log(msg.user, 'says:', msg.text);
+    else if (msg.type === 'typing') console.log(msg.user, 'is typing...');
+    else console.log('unknown message type:', msg.type);
+
+    seen += 1;
+    if (seen === 3) ws.close();
+  };
+
+  ws.onclose = () => console.log('three distinct message types, one clean dispatch, done');
+})();`;
+
+<NodeRunner client:visible code={framingCode} />
+
+Three sends became three `onmessage` calls — the WebSocket kept the boundaries perfect. And because each message announced its `type`, the receiver handled all three kinds with a clean `if/else` instead of guessing from text. Add a fourth message type tomorrow and only one new branch changes.
+
+<Callout title="The one-line takeaway">
+WebSocket already frames the **bytes** for you — one `send` is one `onmessage`. But you must still frame the **meaning**: send exactly one JSON object per message, give every message a `type`, and dispatch on that type.
+</Callout>
+
+export const quizFraming = [
+  {
+    q: 'How does WebSocket message delivery differ from raw TCP?',
+    options: [
+      'WebSocket is also a raw byte stream with no boundaries',
+      'WebSocket delivers discrete whole messages — one send becomes one onmessage',
+      'WebSocket guarantees messages are JSON',
+      'WebSocket reorders messages for efficiency',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Since messages already arrive whole, why still design an application protocol?',
+    options: [
+      'To re-split messages that TCP merged',
+      'Because whole bytes still have no agreed meaning — you need types and named fields to handle more than one kind of message',
+      'Because onmessage fires more than once per message',
+      'It is only needed for binary frames',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the recommended framing discipline in this lesson?',
+    options: [
+      'Pack several logical messages into one send to save bandwidth',
+      'One JSON object per message, each with a type field the receiver dispatches on',
+      'Use newline-delimited plain strings and sniff their prefixes',
+      'Split each message across multiple sends',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/framing-messages" questions={quizFraming} />
+
+<ProgressTracker client:visible id="message-design/framing-messages" />

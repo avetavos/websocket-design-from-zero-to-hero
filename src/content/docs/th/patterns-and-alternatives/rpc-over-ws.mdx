@@ -1,0 +1,161 @@
+---
+title: 'RPC over WebSocket'
+description: 'request/response บนท่อข้อความทางเดียว: correlation id, promise ที่ resolve เมื่อ reply ที่ตรงกันมาถึง และ timeout — พร้อม demo ฝั่ง client ที่รันได้'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Pub/sub เกี่ยวกับ *การ broadcast ความสนใจ* แต่บางครั้ง client ต้องการสิ่งตรงข้าม: คำตอบที่แม่นยำของคำถามเฉพาะข้อหนึ่ง — "ประวัติของห้องนี้เป็นอย่างไร?", "username นี้ถูกใช้ไปแล้วหรือยัง?" บน HTTP นั่นก็แค่ request และ response ของมัน แต่บน WebSocket ไม่มีสิ่งแบบนั้นมาให้ในตัว: คุณ `send` message ออกไป และแยกกัน `onmessage` ก็ทำงานสำหรับ *ทุก* message ที่เข้ามา ไม่มีอะไรผูก reply กลับไปยังคำถามที่กระตุ้นมัน **RPC over WebSocket** คือ pattern เล็ก ๆ ที่สร้าง request/response ขึ้นมาใหม่บน stream ข้อความทางเดียว
+
+## ปัญหา: message ไม่มี reply
+
+WebSocket คือ stream ของ frame ที่เป็นอิสระต่อกันในแต่ละทิศทาง เมื่อคุณเรียก `ws.send` แล้วต่อมา message มาถึง คุณไม่มีวิธีในระดับภาษาที่จะรู้ว่า *message นั้น* ตอบ *การ send นี้* ถ้าคุณยิงสาม request แล้วสาม reply กลับมา — ซึ่งอาจสลับลำดับกัน — มันทั้งหมดลงมาที่ handler `onmessage` เดียวกันในรูปกองที่แยกแยะไม่ออก คุณต้องเย็บแต่ละ reply เข้ากับ request ของมันเอง
+
+## ทางแก้: correlation id
+
+เคล็ดลับคือติด **correlation id** ที่ไม่ซ้ำกันให้ทุก request และกำหนดให้เซิร์ฟเวอร์สะท้อน id เดียวกันนั้นกลับมาบน reply ฝั่ง client เก็บตารางของ request ที่ *กำลังรอ* โดยใช้ id เป็น key เมื่อ message มาถึง คุณค้น id ของมัน หา promise ที่กำลังรออยู่ แล้ว resolve มัน ขั้นตอนเป็นแบบนี้:
+
+<Mermaid title="correlation id ผูกแต่ละ reply กลับไปยัง request ของมัน" code={rpcSeq} />
+
+export const rpcSeq = `sequenceDiagram
+  participant App as App code
+  participant RPC as RPC client
+  participant WS as WebSocket
+  participant Srv as Server
+  App->>RPC: call('getUser', {id: 7})
+  RPC->>RPC: id = 'r1'; store pending['r1'] = resolve
+  RPC->>WS: send {id:'r1', method:'getUser', params:{id:7}}
+  WS->>Srv: {id:'r1', ...}
+  Srv-->>WS: {id:'r1', result:{name:'Sam'}}
+  WS-->>RPC: onmessage {id:'r1', result:...}
+  RPC->>RPC: lookup pending['r1'] -> resolve(result)
+  RPC-->>App: promise resolves with {name:'Sam'}`;
+
+เพราะแต่ละ request พก id ของตัวเอง reply จึงมาถึงในลำดับใดก็ได้ — id ไม่ใช่ลำดับการมาถึง ที่ตัดสินว่า promise ใด resolve นั่นคือสิ่งที่ทำให้การเชื่อมต่อเดียวปลอดภัยที่จะ multiplex ข้ามการเรียกพร้อมกันหลายครั้ง
+
+## สามชิ้นส่วนที่คุณต้องมีเสมอ
+
+RPC client บน WebSocket ที่ใช้งานได้จริงโดยพื้นฐานคือสามสิ่ง:
+
+- **pending map.** `Map<id, { resolve, reject, timer }>` — หนึ่งรายการต่อหนึ่งการเรียกที่กำลังบินอยู่ ถูกลบออกเมื่อ reply ลงมาหรือเมื่อการเรียก timeout
+- **id generator.** แหล่งกำเนิดสตริงที่ไม่ซ้ำกันอันใดก็ได้ — counter, `crypto.randomUUID()` มันแค่ต้องไม่ซ้ำกันในบรรดาการเรียกที่ *กำลังรออยู่ในขณะนั้น*
+- **timeout.** จุดอ่อนร้ายแรงของ RPC แบบไร้เดียงสาคือ reply ที่ไม่มีวันมา (เซิร์ฟเวอร์ crash, message หลุด) ถ้าไม่มี timeout promise จะค้างตลอดกาลและ pending map จะรั่ว ทุกการเรียกจะได้ timer ที่ reject และเคลียร์ตัวเองหากไม่มี reply มาถึงในเวลาที่กำหนด
+
+## ดูมันทำงานสด ๆ
+
+demo ต่อสาย mock สไตล์ `WebSocket` จริงเข้ากับ RPC client ที่สมบูรณ์ เราเรียกสำเร็จสองครั้ง (`add` และ `echo`) ซึ่ง reply มาถึง **สลับลำดับกัน** และเรียกหนึ่งครั้งไปยัง method ที่เซิร์ฟเวอร์เพิกเฉย — เพื่อพิสูจน์ว่า timeout ทำงานและ reject แทนที่จะค้าง รันมันแล้วดูว่า id จับคู่ reply เข้ากับการเรียกได้ไม่ว่าลำดับจะเป็นอย่างไร และ reply ที่หายไปจะ reject ตามกำหนด
+
+export const rpcDemoCode = `(function () {
+  // Mock socket with the real WebSocket API. Its 'server' replies after a delay,
+  // and deliberately answers out of order. In a real app this is:
+  //   const ws = new WebSocket('wss://your-server')
+  class MockSocket {
+    constructor() { this.readyState = 1; }
+    send(raw) {
+      const msg = JSON.parse(raw);
+      // Simulate a server that handles add/echo and ignores 'noReply'.
+      if (msg.method === 'add') {
+        const delay = 80; // arrives second despite being sent first
+        setTimeout(() => this._reply({ id: msg.id, result: msg.params.a + msg.params.b }), delay);
+      } else if (msg.method === 'echo') {
+        const delay = 20; // arrives first
+        setTimeout(() => this._reply({ id: msg.id, result: msg.params.text }), delay);
+      }
+      // 'noReply' is silently dropped -> the client's timeout must fire.
+    }
+    _reply(obj) { if (this.onmessage) this.onmessage({ data: JSON.stringify(obj) }); }
+  }
+
+  // The reusable RPC client: send a request, get a promise back.
+  class RpcClient {
+    constructor(ws, timeoutMs) {
+      this.ws = ws;
+      this.timeoutMs = timeoutMs || 1000;
+      this.pending = new Map();
+      this.seq = 0;
+      ws.onmessage = (event) => this._onMessage(event.data);
+    }
+    call(method, params) {
+      const id = 'r' + (++this.seq);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error('timeout: no reply for ' + method + ' (' + id + ')'));
+        }, this.timeoutMs);
+        this.pending.set(id, { resolve, reject, timer });
+        this.ws.send(JSON.stringify({ id: id, method: method, params: params }));
+        console.log('-> sent', method, 'as', id);
+      });
+    }
+    _onMessage(raw) {
+      const msg = JSON.parse(raw);
+      const entry = this.pending.get(msg.id);
+      if (!entry) return; // unknown id (late/duplicate) — ignore
+      clearTimeout(entry.timer);
+      this.pending.delete(msg.id);
+      if ('error' in msg) entry.reject(new Error(msg.error));
+      else entry.resolve(msg.result);
+    }
+  }
+
+  const rpc = new RpcClient(new MockSocket(), 300);
+
+  rpc.call('add', { a: 2, b: 3 }).then((r) => console.log('<- add resolved:', r));
+  rpc.call('echo', { text: 'hello' }).then((r) => console.log('<- echo resolved:', r));
+  rpc.call('noReply', {}).catch((e) => console.log('<- noReply rejected:', e.message));
+})();`;
+
+<NodeRunner client:visible code={rpcDemoCode} />
+
+สังเกตลำดับใน log: `add` และ `echo` ถูก *ส่ง* เป็นอันแรกและอันที่สอง แต่ `echo` *resolve* ก่อนเพราะ reply ของมันเร็วกว่า — และนั่นไม่เป็นไร เพราะแต่ละ promise ถูก key ด้วย id ไม่ใช่ด้วยลำดับ ในขณะเดียวกัน `noReply` ไม่เคยได้คำตอบ ดังนั้นหลังจาก timeout promise ของมันจึง reject ด้วย error ที่ชัดเจน และรายการ pending ของมันถูกลบออก การเคลียร์นั้นคือความแตกต่างระหว่าง client ที่ทนทานกับ memory leak ที่ค่อย ๆ รั่ว
+
+## ออกแบบ wire format
+
+รักษา envelope ให้น้อยที่สุดและสมมาตร request พก `id`, `method` และ `params` ส่วน reply พก `id` เดียวกันและไม่ `result` ก็ `error` ถ้าคุณต้องการมาตรฐานแทนการประดิษฐ์เอง [JSON-RPC 2.0](https://www.jsonrpc.org/specification) นิยามรูปร่างนี้ไว้พอดี — id, method, params, result/error — และเป็นค่าตั้งต้นที่สมเหตุสมผลในการลอกมาใช้ ไม่ว่าทางใดกฎก็ตายตัว: **reply ต้องสะท้อน id ของ request** มิฉะนั้น client จะ route มันไม่ได้
+
+<Callout title="สร้าง request/response ขึ้นมาใหม่เอง">
+WebSocket ไม่มีแนวคิดเรื่อง reply มาให้ในตัว ติด **correlation id** ให้แต่ละ request เก็บ **pending promise** ที่ key ด้วย id นั้น แล้ว resolve มันเมื่อ message ที่พก id เดียวกันมาถึง ติด **timeout** เสมอเพื่อให้ reply ที่หายไป reject และเคลียร์ตัวแทนที่จะค้างตลอดกาล
+</Callout>
+
+export const quizRpc = [
+  {
+    q: 'ทำไม RPC บน WebSocket ถึงต้องมี correlation id บนทุก request?',
+    options: [
+      'เพื่อเข้ารหัส payload ของ request',
+      'เพื่อให้ client จับคู่แต่ละ reply ที่เข้ามากับ request ที่กระตุ้นมันได้',
+      'เพราะ WebSocket ต้องการ message id ที่เป็นตัวเลข',
+      'เพื่อบีบอัดชื่อ method ที่ซ้ำกัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน demo ทำไม echo ถึง resolve ก่อน add ทั้งที่ add ถูกส่งก่อน?',
+    options: [
+      'client เรียงลำดับ reply ตามตัวอักษร',
+      'แต่ละ pending promise ถูก key ด้วย id ดังนั้นลำดับของ reply จึงไม่มีผล',
+      'add ไม่เคยถูกส่งจริง ๆ',
+      'WebSocket รับประกันการส่งแบบ last-in-first-out',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'timeout มีบทบาทอะไรใน RPC client?',
+    options: [
+      'มันจำกัดว่า request ส่งได้เร็วแค่ไหน',
+      'มัน reject และเคลียร์การเรียกที่ reply ไม่เคยมาถึง ป้องกัน promise ที่ค้างและ pending map ที่รั่ว',
+      'มันลองส่ง request ใหม่โดยอัตโนมัติ',
+      'มันปิด WebSocket หลังจากทุกการเรียก',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="patterns-and-alternatives/rpc-over-ws" questions={quizRpc} />
+
+<ProgressTracker client:visible id="patterns-and-alternatives/rpc-over-ws" />

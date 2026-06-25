@@ -1,0 +1,102 @@
+---
+title: 'Scaling และ Pub/Sub'
+description: 'ทำไม process เดียวจึงไม่สามารถถือ connection ทั้งหมดของคุณไว้ได้ ทำไมการ broadcast จึงไปถึงเฉพาะ client บน instance นี้ และ pub/sub backplane แก้อะไรให้'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Node process เดียวสามารถถือ WebSocket ที่เปิดอยู่ได้มากอย่างน่าประหลาดใจ — หลายหมื่น connection บนเครื่องที่สุขภาพดี ดังนั้นในช่วงแรก scaling จึงรู้สึกเหมือนเป็นปัญหาที่คุณมองข้ามไปได้ แล้ว traffic ก็โตขึ้น คุณเพิ่ม server ตัวที่สองไว้หลัง load balancer และมีบางอย่างแปลก ๆ เกิดขึ้น: **ข้อความที่ส่งโดยผู้ใช้บน server A ไม่เคยไปถึงผู้ใช้บน server B เลย** แชทดูเหมือนพังทั้งที่ทุกบรรทัดในโค้ดของคุณถูกต้อง
+
+โมดูลนี้ว่าด้วยช่องว่างนั้นและวิธีปิดมัน
+
+## connection คือสิ่งที่อยู่ใน memory
+
+รายละเอียดที่ทำให้ scaling ยากนั้นมองข้ามได้ง่าย เมื่อ client เชื่อมต่อเข้ามา server จะเก็บ object ใน memory สำหรับ socket นั้น — ตัว file descriptor, frame ที่ buffer ไว้ และมักจะมี application state บางอย่างที่คุณผูกติดไว้ เช่น id ของผู้ใช้หรือ room ที่เขาเข้าร่วม
+
+object นั้นอยู่ใน **process เดียว บนเครื่องเดียว** มันไม่ได้อยู่ใน database มันไม่ได้ถูกแชร์ server อีกตัวไม่เคยได้ยินเรื่องมันเลย ถ้า process นั้น restart ทุก connection ที่มันถือไว้ก็หายไป และทุก client ต้อง reconnect ใหม่
+
+ดังนั้น "รายชื่อว่าใครเชื่อมต่ออยู่บ้าง" จริง ๆ แล้วคือ "รายชื่อว่าใครเชื่อมต่ออยู่*กับ instance ตัวนี้โดยเฉพาะ*" และข้อเท็จจริงเดียวนั้นเองที่ทำให้ broadcast พัง
+
+## การ broadcast ไปถึงแค่ instance นี้เท่านั้น
+
+ลองนึกถึงฟีเจอร์ real-time ที่ง่ายที่สุด: มีคนโพสต์ข้อความแชทและคุณอยากให้ทุกคนเห็น โค้ดที่เป็นธรรมชาติคือ "loop ผ่าน client ที่เชื่อมต่ออยู่ของฉันแล้วส่งให้แต่ละคน"
+
+ปัญหาอยู่ที่คำว่า *ของฉัน* แต่ละ instance สามารถ loop ได้เฉพาะ socket ที่มันถือไว้เองเท่านั้น เมื่อ client กระจายอยู่บนสอง instance โดย load balancer การ broadcast บน instance หนึ่งจะไปถึงครึ่งห้อง และข้ามอีกครึ่งไปเงียบ ๆ
+
+<Mermaid title="client ถูกแบ่งกระจายข้าม instance — การ broadcast แบบ local พลาดไปครึ่งห้อง" code={splitDiagram} />
+
+export const splitDiagram = `flowchart TB
+  lb["Load balancer"]
+  subgraph A["Instance A (in-memory sockets)"]
+    a1["client 1"]
+    a2["client 2"]
+  end
+  subgraph B["Instance B (in-memory sockets)"]
+    b1["client 3"]
+    b2["client 4"]
+  end
+  lb --> a1
+  lb --> a2
+  lb --> b1
+  lb --> b2
+  a1 -. "posts a message" .-> A
+  A == "broadcast reaches A only" ==> a2
+  A -. "client 3 and 4 never hear it" .-x B`;
+
+client 1 โพสต์ข้อความ Instance A ส่งให้ client 2 ได้อย่างซื่อสัตย์ ซึ่ง client 2 ก็อยู่บน A เช่นกัน ส่วน client 3 และ 4 อยู่บน instance B ที่ไม่รู้เลยว่าข้อความนี้เคยมีอยู่ จากที่นั่งของพวกเขา ห้องนั้นเงียบไป ไม่มีอะไร crash — ข้อความเพียงแค่ไม่มีเส้นทางระหว่าง instance
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+การแก้ปัญหานี้ส่วนใหญ่เป็นแบบฝึกหัดด้าน architecture ดังนั้นบทเรียนจึงพึ่งพา diagram และ TypeScript ขนาดเล็กมากกว่า server ที่รันได้ตัวเดียว เส้นทางคือ:
+
+- **[ทำไม scaling จึงยาก](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/why-scaling-is-hard)** — connection state ใน memory, ต้นทุนต่อ connection, การ balance connection ที่มีอายุยืน และปัญหา cross-instance broadcast ที่ระบุไว้อย่างแม่นยำ
+- **[pub/sub backplane](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/pubsub-backplane)** — วาง bus ที่แชร์กัน (Redis pub/sub, NATS, Kafka) ไว้ระหว่าง instance เพื่อให้ทุกข้อความที่ publish ไปถึงทุก instance ซึ่งจากนั้นจะ fan-out ไปยัง client ภายในของตัวเอง พร้อม demo ในหน้าของสอง instance ที่แชร์ bus เดียวกัน
+- **[Presence ข้าม instance](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/presence)** — การติดตามว่าใครออนไลน์อยู่เมื่อ "ออนไลน์" กระจายอยู่ตามเครื่องต่าง ๆ: shared store, heartbeat, การหมดอายุ และ reconnect stampede
+- **[Sticky vs stateless](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/sticky-vs-stateless)** — route client กลับไปยัง instance ของมัน หรือปล่อยให้ instance ใดก็ได้ให้บริการจาก shared state และวิธีตั้งค่า load balancer ในแต่ละแบบ
+
+<Callout title="ปัญหาหลักในบรรทัดเดียว">
+WebSocket connection อยู่ใน memory ของ process เพียงตัวเดียวเท่านั้น ดังนั้น broadcast จึงไปถึงได้แค่ client ที่ process นั้นถือไว้เองเท่านั้น การ scale real-time ส่วนใหญ่คืองานของการให้ instance มีวิธีแชร์ข้อความที่มันมองไม่เห็นโดยตรง
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'ทำไม broadcast ที่ทำงานได้บน server หนึ่งจึงล้มเหลวในการไปถึงผู้ใช้บางคนหลังจากที่คุณเพิ่ม server ตัวที่สอง?',
+    options: [
+      'server ตัวที่สองรันโค้ดคนละเวอร์ชัน',
+      'แต่ละ instance สามารถ iterate ได้เฉพาะ socket ที่มันถือไว้ใน memory ของตัวเองเท่านั้น',
+      'load balancer ตัด broadcast frame ทิ้งโดยค่าเริ่มต้น',
+      'ข้อความ WebSocket หมดอายุก่อนที่จะข้ามเครื่อง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'state ของ WebSocket connection อยู่ที่ไหนจริง ๆ?',
+    options: [
+      'ใน database ที่แชร์กันซึ่งทุก instance อ่านได้',
+      'บน load balancer',
+      'ใน memory ของ process เดียวที่รับ connection นั้นเข้ามา',
+      'ใน browser ของ client เท่านั้น',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'งานหลักของเทคนิคในโมดูลนี้คืออะไร?',
+    options: [
+      'การบีบอัด WebSocket frame เพื่อประหยัด bandwidth',
+      'การให้ instance ที่แยกกันมีวิธีแชร์ข้อความที่มันมองไม่เห็นในระดับ local',
+      'การเข้ารหัส traffic ระหว่าง client และ server',
+      'การลดขนาดของ WebSocket handshake',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="scaling-and-pubsub/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="scaling-and-pubsub/index" />

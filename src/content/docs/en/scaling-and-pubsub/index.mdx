@@ -1,0 +1,102 @@
+---
+title: 'Scaling and Pub/Sub'
+description: 'Why one process cannot hold all your connections, why broadcasting only reaches clients on this instance, and what a pub/sub backplane fixes.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+A single Node process can hold a surprising number of open WebSockets — tens of thousands on a healthy machine. So for a while, scaling feels like a problem you can ignore. Then traffic grows, you add a second server behind a load balancer, and something strange happens: **a message sent by a user on server A never reaches a user on server B.** The chat looks broken even though every line of your code is correct.
+
+This module is about that gap and how to close it.
+
+## A connection is a thing that lives in memory
+
+The detail that makes scaling hard is easy to miss. When a client connects, the server keeps an in-memory object for that socket — the file descriptor, any buffered frames, and usually some application state you attached, like the user's id or which rooms they joined.
+
+That object lives in **one process, on one machine**. It is not in a database. It is not shared. The other server has never heard of it. If that process restarts, every connection it held is gone and every client has to reconnect.
+
+So "the list of who is connected" is really "the list of who is connected *to this specific instance*". And that single fact is what breaks broadcasting.
+
+## Broadcasting only reaches this instance
+
+Imagine the simplest real-time feature: someone posts a chat message and you want everyone to see it. The natural code is "loop over my connected clients and send to each".
+
+The problem is the word *my*. Each instance can only loop over the sockets it personally holds. When clients are spread across two instances by a load balancer, a broadcast on one instance reaches half the room and silently skips the other half.
+
+<Mermaid title="Clients split across instances — a local broadcast misses half the room" code={splitDiagram} />
+
+export const splitDiagram = `flowchart TB
+  lb["Load balancer"]
+  subgraph A["Instance A (in-memory sockets)"]
+    a1["client 1"]
+    a2["client 2"]
+  end
+  subgraph B["Instance B (in-memory sockets)"]
+    b1["client 3"]
+    b2["client 4"]
+  end
+  lb --> a1
+  lb --> a2
+  lb --> b1
+  lb --> b2
+  a1 -. "posts a message" .-> A
+  A == "broadcast reaches A only" ==> a2
+  A -. "client 3 and 4 never hear it" .-x B`;
+
+Client 1 posts a message. Instance A faithfully delivers it to client 2, who is also on A. Clients 3 and 4 are on instance B, which has no idea the message ever existed. From their seats, the room went quiet. Nothing crashed — the message simply had no path between instances.
+
+## What this module covers
+
+Solving this is mostly an architecture exercise, so the lessons lean on diagrams and small TypeScript sketches rather than a single runnable server. The path:
+
+- **[Why scaling is hard](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/why-scaling-is-hard)** — connection state in memory, the per-connection cost, balancing long-lived connections, and the cross-instance broadcast problem stated precisely.
+- **[A pub/sub backplane](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/pubsub-backplane)** — put a shared bus (Redis pub/sub, NATS, Kafka) between instances so every published message reaches every instance, which then fans out to its own local clients. With an in-page demo of two instances sharing one bus.
+- **[Presence across instances](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/presence)** — tracking who is online when "online" is scattered across machines: a shared store, heartbeats, expiry, and the reconnect stampede.
+- **[Sticky vs stateless](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/sticky-vs-stateless)** — route a client back to its instance, or let any instance serve it from shared state, and how to configure the load balancer either way.
+
+<Callout title="The core problem in one line">
+A WebSocket connection lives in the memory of exactly one process, so a broadcast can only reach the clients that process personally holds. Scaling real-time is mostly the work of giving instances a way to share messages they cannot see directly.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Why does a broadcast that works on one server fail to reach some users after you add a second server?',
+    options: [
+      'The second server runs a different version of the code',
+      'Each instance can only iterate the sockets it holds in its own memory',
+      'Load balancers drop broadcast frames by default',
+      'WebSocket messages expire before crossing machines',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where does a WebSocket connection’s state actually live?',
+    options: [
+      'In a shared database every instance reads',
+      'On the load balancer',
+      'In the memory of the single process that accepted the connection',
+      'In the client’s browser only',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What is the main job of the techniques in this module?',
+    options: [
+      'Compressing WebSocket frames to save bandwidth',
+      'Giving separate instances a way to share messages they cannot see locally',
+      'Encrypting traffic between client and server',
+      'Reducing the size of the WebSocket handshake',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="scaling-and-pubsub/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="scaling-and-pubsub/index" />

@@ -1,0 +1,99 @@
+---
+title: 'WebSocket vs SSE vs WebTransport'
+description: 'เลือก transport สำหรับ real-time — WebSocket สองทาง, SSE ทางเดียว, long-polling fallback และ WebTransport บน HTTP/3 — และเมื่อไหร่ที่แต่ละแบบชนะ'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+WebSocket เป็น transport สำหรับ real-time ที่ *มีความสามารถ* มากที่สุด แต่ความสามารถไม่เหมือนกับความเหมาะสม มีทางเลือกสามแบบอยู่รอบ ๆ มัน แต่ละแบบยอมแลกพลังบางส่วนทิ้งไปเพื่อความเรียบง่าย ความเข้ากันได้ หรือความเร็วล้วน ๆ การรู้ว่าแต่ละแบบชนะตรงไหนช่วยให้คุณไม่ต้องแบก full duplex socket — พร้อมกลไก reconnection, heartbeat และ auth ของมัน — ในตอนที่อะไรที่เบากว่าก็พอใช้ได้แล้ว
+
+## สี่ตัวเลือก
+
+- **WebSocket** — การเชื่อมต่อเดียว ถาวร และ **สองทาง** ฝั่งใดก็ส่ง message ได้ทุกเมื่อ เรียงลำดับและเชื่อถือได้ เป็นค่าตั้งต้นเมื่อ traffic ไหลทั้งสองทางจริง ๆ: แชต การทำงานร่วมกัน multiplayer คำสั่งแบบสด
+- **Server-Sent Events (SSE)** — HTTP response ที่อยู่ยาวซึ่ง stream event ที่เป็น text **จากเซิร์ฟเวอร์ → client เท่านั้น** client ส่งผ่านมันไม่ได้ (มันใช้ HTTP request ธรรมดาสำหรับการส่ง) สิ่งที่ได้คือมันเรียบง่ายสุด ๆ วิ่งบน HTTP ธรรมดา และ `EventSource` ของเบราว์เซอร์ **reconnect ให้อัตโนมัติ** แล้วต่อยอดจาก event id ล่าสุด เหมาะสำหรับ feed: การแจ้งเตือน dashboard ticker ราคา progress log
+- **Long-polling** — ไม่ใช่ transport แบบ stream จริง ๆ แต่เป็น **fallback** client ส่ง HTTP request เซิร์ฟเวอร์ถือมันเปิดไว้จนกว่าจะมีอะไรจะพูด ตอบกลับ แล้ว client ก็ขอใหม่ทันที มันทำงานได้ผ่าน proxy หรือ stack เก่าแก่แทบทุกแบบ โดยแลกกับ latency และ overhead ไลบรารีใช้มันเป็นการลดระดับอย่างนุ่มนวลเมื่อ WebSocket หรือ SSE ถูกบล็อก
+- **WebTransport** — น้องใหม่ สร้างบน **HTTP/3 (QUIC)** มันเสนอทั้ง **stream** ที่เชื่อถือได้และเรียงลำดับ *และ* **datagram** ที่ไม่เชื่อถือได้และไม่เรียงลำดับ บนการเชื่อมต่อเดียว พร้อม multiplexing ที่หลีกเลี่ยง head-of-line blocking มุ่งเป้าไปที่ media และเกมความถี่สูงและไวต่อ latency ที่การทิ้งแพ็กเก็ตเก่าดีกว่าการรอ retransmit ยังใหม่กว่า WebSocket และยังไม่รองรับทั่วทุกที่
+
+## เลือกหนึ่งตัว
+
+การตัดสินใจมักหลุดออกมาจากสองคำถาม: *ข้อมูลไหลในทิศทางใดบ้าง* และ *traffic ทนต่อการสูญหายเพื่อแลกกับความเร็วได้หรือไม่?*
+
+<Mermaid title="ขั้นตอนการตัดสินใจเลือก transport สำหรับ real-time" code={decisionDiagram} />
+
+export const decisionDiagram = `flowchart TD
+  q1["Does the client need to send<br/>messages mid-connection?"]
+  q1 -- "No — server pushes only" --> q2["Need to resume a stream<br/>and reconnect for free?"]
+  q2 -- "Yes, and plain HTTP is fine" --> sse["Server-Sent Events"]
+  q2 -- "Legacy proxies break streaming" --> poll["Long-polling fallback"]
+  q1 -- "Yes — both directions" --> q3["High-frequency media, or<br/>OK to drop stale packets?"]
+  q3 -- "No — ordered, reliable messages" --> ws["WebSocket"]
+  q3 -- "Yes — datagrams / low latency" --> wt["WebTransport (HTTP/3)"]`;
+
+อ้างอิงอย่างรวดเร็ว เทียบกันแบบเคียงข้าง:
+
+| Transport | ทิศทาง | Protocol | Auto-reconnect | การส่ง | เหมาะที่สุดสำหรับ |
+| --- | --- | --- | --- | --- |
+| **WebSocket** | สองทาง | TCP, HTTP Upgrade | คุณสร้างเอง | เรียงลำดับ เชื่อถือได้ | แชต การทำงานร่วมกัน คำสั่ง |
+| **SSE** | เซิร์ฟเวอร์ → client | HTTP (`text/event-stream`) | มีในตัว (`EventSource`) | เรียงลำดับ เชื่อถือได้ | feed การแจ้งเตือน dashboard |
+| **Long-polling** | วน request/response | HTTP | ไม่มี (ขอใหม่) | เชื่อถือได้ latency สูงกว่า | fallback ผ่าน proxy เก่า |
+| **WebTransport** | สองทาง | HTTP/3 (QUIC) | คุณสร้างเอง | stream *หรือ* datagram | เกม media แบบ real-time |
+
+## สิ่งที่มักทำให้คนสะดุด
+
+ข้อเท็จจริงไม่กี่อย่างที่เปลี่ยนการออกแบบจริง:
+
+- **SSE มีงบประมาณการเชื่อมต่อต่อ origin.** บน HTTP/1.1 เบราว์เซอร์จำกัดจำนวนการเชื่อมต่อพร้อมกันต่อ host (โดยทั่วไปคือหก) และ `EventSource` ที่อยู่ยาวกินไปหนึ่ง การเปิดหลายแท็บไปยัง origin เดียวกันอาจใช้มันจนหมด บน HTTP/2 ขีดจำกัดนี้แทบหายไปเพราะ stream ถูก multiplex
+- **SSE เป็น text เท่านั้น.** event เป็น UTF-8 text การส่ง binary ต้อง base64-encode มัน ซึ่งทำให้เปลืองไบต์เพิ่มขึ้นราวหนึ่งในสาม WebSocket และ WebTransport พา binary ได้ในตัว
+- **WebTransport datagram ไม่เชื่อถือได้โดยตั้งใจ.** datagram อาจถูกทิ้งหรือมาถึงแบบสลับลำดับและไม่เคยถูก retransmit นั่นเป็น *ฟีเจอร์* สำหรับ media แบบสด — เฟรมวิดีโอจากเมื่อ 200 ms ที่แล้วไร้ประโยชน์ การข้ามมันจึงดีกว่าการรอ ถ้าคุณต้องการความเชื่อถือได้ ให้ใช้ WebTransport *stream* แทน
+- **"Real-time" แทบไม่เคยแปลว่าสองทาง.** ฟีเจอร์จำนวนน่าแปลกใจมีแต่การ push จากเซิร์ฟเวอร์ไปยัง client สำหรับสิ่งเหล่านั้น SSE ขจัดความกังวลของ WebSocket ทั้งชุด — ไม่ต้อง reconnect เอง ไม่ต้อง heartbeat ปลอม ๆ เพื่อจำลองความมีชีวิต — แบบฟรี ๆ
+
+## ค่าตั้งต้นที่ใช้งานได้จริง
+
+ถ้าข้อมูลไหลจากเซิร์ฟเวอร์ไปยัง client เท่านั้นและมี HTTP ธรรมดาให้ใช้ ให้คว้า **SSE** ก่อน คุณจะเขียนโค้ดน้อยลง ถ้า client ต้องส่งด้วย ให้ใช้ **WebSocket** — มันสุกงอม รองรับทั่วทุกที่ และเป็นเส้นทางที่ส่วนที่เหลือของคอร์สนี้เตรียมคุณไว้แล้ว เก็บ **long-polling** ไว้ในกระเป๋าหลังเป็น fallback สำหรับเครือข่ายที่เป็นปฏิปักษ์ และจับตา **WebTransport** ในขณะที่มันสุกงอมขึ้นสำหรับชั้นของเกมและ media ที่ datagram สำคัญ จับคู่ transport ให้เข้ากับ traffic ไม่ใช่เข้ากับกระแสฮือฮา
+
+<Callout title="เลือกตามทิศทางและความทนทาน">
+**SSE** เมื่อมีแต่เซิร์ฟเวอร์ push และคุณต้องการ auto-reconnect แบบฟรี **WebSocket** เมื่อทั้งสองฝั่งส่ง message ที่เรียงลำดับและเชื่อถือได้ — ค่าตั้งต้นที่ปลอดภัย **Long-polling** เป็น fallback ผ่าน proxy ที่เป็นปฏิปักษ์ **WebTransport** เมื่อคุณต้องการ datagram บน HTTP/3 หรือ stream แบบ multiplex สำหรับ media latency ต่ำ ความสามารถไม่เท่ากับความเหมาะสม — เลือกเครื่องมือที่เบาที่สุดที่พา traffic ของคุณได้
+</Callout>
+
+export const quizChoose = [
+  {
+    q: 'transport แบบใด stream event จากเซิร์ฟเวอร์ไปยัง client เท่านั้นและ reconnect ให้อัตโนมัติในเบราว์เซอร์?',
+    options: [
+      'WebSocket',
+      'Server-Sent Events (SSE)',
+      'WebTransport',
+      'Long-polling',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'อะไรคือสิ่งที่ทำให้ WebTransport โดดเด่นเมื่อเทียบกับ WebSocket?',
+    options: [
+      'มันทำงานจากเซิร์ฟเวอร์ไปยัง client เท่านั้น',
+      'มันวิ่งบน HTTP/3 และเสนอทั้ง stream ที่เชื่อถือได้และ datagram ที่ไม่เชื่อถือได้',
+      'มันพา binary data ไม่ได้',
+      'มันเก่ากว่าและรองรับกว้างกว่า',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม WebTransport datagram บางครั้งจึงดีกว่า stream ที่เชื่อถือได้และเรียงลำดับ?',
+    options: [
+      'มันถูกเข้ารหัสแต่ stream ไม่ถูกเข้ารหัส',
+      'สำหรับ media แบบสด การทิ้งแพ็กเก็ตเก่าดีกว่าการรอ retransmit',
+      'มันรับประกันการส่งแบบเรียงลำดับ',
+      'มันทำงานผ่าน proxy HTTP/1.1',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="patterns-and-alternatives/ws-vs-sse-vs-webtransport" questions={quizChoose} />
+
+<ProgressTracker client:visible id="patterns-and-alternatives/ws-vs-sse-vs-webtransport" />

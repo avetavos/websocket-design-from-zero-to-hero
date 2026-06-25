@@ -1,0 +1,154 @@
+---
+title: 'วงจรชีวิตของ Connection'
+description: 'ชีวิตทั้งหมดของ WebSocket connection — connect, live, drop, reconnect, close — ในรูปแบบ state machine พร้อมภาพรวมว่าโมดูลนี้ครอบคลุมอะไรบ้าง'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+จนถึงตอนนี้เราปฏิบัติต่อ WebSocket ราวกับว่ามัน *มีอยู่* เฉย ๆ คือคุณเปิดมัน คุณส่ง คุณรับ แต่ connection จริง ๆ ไม่ได้เรียบร้อยขนาดนั้น มันถือกำเนิดขึ้น มันมีชีวิตอยู่ชั่วระยะหนึ่ง บางครั้งมันก็ตายไปโดยไม่เตือนล่วงหน้า และ — ถ้าแอปของคุณดีพอ — มันก็ฟื้นคืนชีพกลับมาด้วยตัวมันเอง โมดูลนี้เป็นเรื่องของวงจรชีวิตทั้งหมดนั้น และหน้านี้คือแผนที่ของมัน
+
+## Connection มีชีวิต
+
+ลองคิดถึง connection หนึ่งตัวเหมือนตัวละครที่มีเรื่องราว:
+
+- **Connecting** — handshake กำลังดำเนินอยู่ ยังส่งอะไรไม่ได้
+- **Live** — socket เปิดอยู่ ข้อความไหลไปมาทั้งสองทิศทาง นี่คือสถานะที่มีความสุข และโค้ดส่วนใหญ่ของคุณก็สมมติว่าคุณอยู่ในสถานะนี้
+- **Dropped** — เน็ตเวิร์กกะพริบหายไปแวบหนึ่ง proxy timeout หรือ server รีสตาร์ต connection ตายไปแล้ว แต่ — และนี่คือกับดัก — โค้ดของคุณอาจยังไม่ได้รับแจ้ง
+- **Reconnecting** — เมื่อตัดสินใจแล้วว่า connection หายไป client จะรอสักครู่แล้วลองใหม่ จากนั้นรอนานขึ้น แล้วก็นานขึ้นอีก จนกว่าจะสำเร็จหรือยอมแพ้
+- **Closed** — การปิดอย่างตั้งใจและสะอาดหมดจด ฝ่ายหนึ่งบอกลา อีกฝ่ายตอบรับ แล้วสายก็ถูกปลดระวางอย่างจงใจ
+
+แนวคิดที่สำคัญที่สุดในโมดูลนี้คือความแตกต่างระหว่าง **dropped** และ **closed** connection ที่ *closed* จบลงเพราะมีคนตั้งใจให้มันจบ ส่วน connection ที่ *dropped* จบลงโดยอุบัติเหตุ — และการตรวจจับอุบัติเหตุนั้นอย่างน่าเชื่อถือกลับยากอย่างน่าประหลาดใจ เพราะ connection ที่พังสามารถดูเหมือน connection ที่เงียบสงบและแข็งแรงได้เป๊ะ ๆ
+
+## วงจรชีวิตในรูปแบบ state machine
+
+<Mermaid title="ชีวิตของ WebSocket connection หนึ่งตัว" code={lifecycleDiagram} />
+
+export const lifecycleDiagram = `stateDiagram-v2
+  [*] --> Connecting
+  Connecting --> Live: handshake ok
+  Connecting --> Reconnecting: handshake failed
+  Live --> Dropped: heartbeat missed / network lost
+  Live --> Closed: clean close (1000)
+  Dropped --> Reconnecting: schedule retry
+  Reconnecting --> Connecting: backoff elapsed
+  Reconnecting --> Closed: gave up
+  Closed --> [*]`;
+
+อ่านไดอะแกรมนี้เหมือนคำสัญญาเกี่ยวกับโค้ดของคุณ: ทุกลูกศรคือสิ่งที่คุณต้องจัดการ ลูกศร `Live to Dropped` คือลูกศรที่แอปส่วนใหญ่ลืม เพราะ `WebSocket` ของเบราว์เซอร์จะไม่ยิง `onclose` ทันทีเสมอไปเมื่อเน็ตเวิร์กตาย — ซึ่งนั่นคือเหตุผลที่บทเรียนถัดไปมีอยู่
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+โมดูลนี้ — **Connection Lifecycle** — เปลี่ยนแต่ละลูกศรข้างบนให้กลายเป็นโค้ดที่ใช้งานได้จริง:
+
+1. **Connection lifecycle (คุณอยู่ที่นี่)** — วงจรชีวิตทั้งหมดในรูปแบบ state machine เดียว
+2. **Heartbeats** — ทำไม dead connection ถึงดูเหมือนยังมีชีวิต และ ping/pong พิสูจน์ได้อย่างไรว่ามันยังหายใจอยู่
+3. **Detecting dead connections** — เปลี่ยน heartbeat ที่หายไปให้กลายเป็นความมั่นใจว่า "อันนี้หายไปแล้ว ปิดมันทิ้ง"
+4. **Reconnection and backoff** — กลับมาอัตโนมัติโดยไม่กระหน่ำ server ที่กำลังดิ้นรน
+5. **Close codes and resume** — close handshake ที่สะอาด ความหมายของ code ตัวเลขต่าง ๆ และการเล่นซ้ำ state ที่คุณพลาดไป
+
+เมื่อจบโมดูล คุณจะได้ connection ที่รักษาตัวเองได้: มันสังเกตได้ว่าเมื่อใดมันตายไปแล้ว backoff อย่างสุภาพ reconnect และตามเก็บทุกอย่างที่มันพลาดไปในระหว่างที่มันหายไป
+
+## ดูวงจรชีวิตทั้งหมดสักครั้ง
+
+ก่อนที่เราจะผ่าแต่ละขั้นตอน ลองดู connection หนึ่งตัวใช้ชีวิตทั้งหมดของมันในการรันครั้งเดียว เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง — `onopen`/`onmessage`/`onclose` เดียวกัน — ที่เปิดขึ้น รันสักครู่ ถูก drop และถูก reconnect แล้วในที่สุดก็ถูก close อย่างตั้งใจ ดู console บรรยายแต่ละสถานะ
+
+export const arcCode = `(function () {
+  // In-page socket with the real WebSocket API. In a real app the only
+  // line that changes is: const ws = new WebSocket('wss://your-server').
+  // This mock opens, then "drops" once (onclose with code 1006) to let us
+  // demonstrate a single reconnect before a clean close.
+  class LifeSocket {
+    constructor(attempt) {
+      this.readyState = 0; // CONNECTING
+      const dropThisTime = attempt === 1;
+      setTimeout(() => {
+        this.readyState = 1; // OPEN
+        if (this.onopen) this.onopen({});
+        if (dropThisTime) {
+          // Simulate an abnormal drop a moment after opening.
+          setTimeout(() => {
+            this.readyState = 3;
+            if (this.onclose) this.onclose({ code: 1006, wasClean: false });
+          }, 120);
+        }
+      }, 60);
+    }
+    send(data) { if (this.onmessage) this.onmessage({ data: data }); }
+    close(code) {
+      this.readyState = 3;
+      setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000, wasClean: true }); }, 10);
+    }
+  }
+
+  let attempt = 0;
+  function connect() {
+    attempt += 1;
+    console.log('state: connecting (attempt ' + attempt + ')');
+    const ws = new LifeSocket(attempt);
+    ws.onopen = () => console.log('state: live');
+    ws.onclose = (event) => {
+      if (event.wasClean) {
+        console.log('state: closed cleanly, code', event.code);
+        return;
+      }
+      console.log('state: dropped (code ' + event.code + ') — reconnecting');
+      setTimeout(connect, 80);
+    };
+    // After a healthy second attempt, close on purpose.
+    if (attempt === 2) {
+      setTimeout(() => { console.log('work done — closing on purpose'); ws.close(1000); }, 120);
+    }
+  }
+  connect();
+})();`;
+
+<NodeRunner client:visible code={arcCode} />
+
+คุณควรจะเห็น: connecting, live, *dropped* (code 1006 ซึ่งคือการจบแบบผิดปกติ) จากนั้น connecting อีกครั้ง live อีกครั้ง และสุดท้าย close อย่างสะอาดด้วย code 1000 การรันครั้งเดียวนั้นคือโมดูลทั้งหมดนี้ในเวอร์ชันย่อ — ทุกบทเรียนต่อจากนี้จะซูมเข้าไปยังหนึ่งใน transition เหล่านั้น
+
+<Callout title="แบบจำลองความคิดสำหรับโมดูลนี้">
+Connection ไม่ใช่สิ่งที่คุณมี แต่เป็นสิ่งที่กำลังเกิดขึ้น มันเคลื่อนผ่าน **connecting, live, dropped, reconnecting, closed** — และหน้าที่ของคุณคือจัดการทุกลูกศร โดยเฉพาะการไถลเงียบ ๆ จาก *live* ไปสู่ *dropped* ที่ไม่มี event ใดประกาศอย่างน่าเชื่อถือ
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'อะไรคือความแตกต่างสำคัญระหว่าง connection แบบ "dropped" และ "closed"?',
+    options: [
+      'Dropped connection ใช้ TLS ส่วน closed ไม่ใช้',
+      'Closed connection จบลงอย่างตั้งใจ ส่วน dropped จบลงโดยอุบัติเหตุ',
+      'Dropped connection จะยิง onopen อีกครั้งโดยอัตโนมัติเสมอ',
+      'ไม่มีความแตกต่าง — ทั้งสองหมายความเหมือนกัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม transition แบบ "live to dropped" ถึงเป็นอันที่แอปพลาดบ่อยที่สุด?',
+    options: [
+      'เบราว์เซอร์ยิง onclose ทันทีเสมอเมื่อเน็ตเวิร์กตาย',
+      'Connection ที่พังสามารถดูเหมือน connection ที่เงียบสงบและแข็งแรงได้เป๊ะ ๆ จึงไม่มี event ใดยิงอย่างน่าเชื่อถือ',
+      'Dropped connection ผิดกฎใน WebSocket protocol',
+      'Server ห้ามไว้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในเดโม connection หนึ่งตัวเคลื่อนผ่านลำดับสถานะใด?',
+    options: [
+      'Live แล้ว closed ทันที ไม่มีอย่างอื่น',
+      'Connecting, live, dropped, connecting, live, closed',
+      'Connecting แล้ว closed โดยไม่มีสถานะ live',
+      'มัน reconnect ตลอดไปและไม่เคย closed',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="connection-lifecycle/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="connection-lifecycle/index" />

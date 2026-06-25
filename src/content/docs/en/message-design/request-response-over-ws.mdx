@@ -1,0 +1,161 @@
+---
+title: 'Request/Response over WebSocket'
+description: 'A WebSocket is message-oriented, not request/response. Add a correlation id so a reply can be matched to its request. A live demo of a tiny request/reply layer over the in-page socket.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Developers coming from HTTP carry a deep assumption: *I called, so this response is mine.* With `fetch`, the answer you `await` is unambiguously the answer to the question you asked. A WebSocket quietly removes that guarantee — and getting it back is one of the most useful patterns in message design.
+
+## The socket is message-oriented, not request/reply
+
+A WebSocket has no concept of a request paired with a response. There is only a stream of messages flowing each way, *independently*. When `onmessage` fires, the message could be:
+
+- a reply to something you just asked,
+- a reply to something you asked three messages ago that took longer,
+- or a completely unsolicited server push (a new chat line, a price tick).
+
+If you fire off three "fetch user" requests and three results come back, **nothing in the transport tells you which result answers which request.** Replies can arrive out of order, interleaved with pushes. You cannot rely on ordering, and you certainly cannot `await` a `send`.
+
+## Correlation ids tie a reply to its request
+
+The fix is a single field you already know how to add: a unique **`id`** on each request, which the server **echoes** on the matching reply. The client keeps a small table of *id → "who is waiting for this"*, and when a reply arrives it looks up the id, resolves that waiter, and removes the entry. Replies for unknown ids (or messages with no id at all) are treated as server pushes.
+
+<Mermaid title="Correlating replies to requests with an echoed id" code={correlationDiagram} />
+
+export const correlationDiagram = `sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: { type: 'getUser', id: 'r1', name: 'alice' }
+  C->>S: { type: 'getUser', id: 'r2', name: 'bob' }
+  Note over S: replies may come back in any order
+  S-->>C: { type: 'reply', id: 'r2', age: 41 }
+  C->>C: look up r2, resolve bob's waiter
+  S-->>C: { type: 'reply', id: 'r1', age: 30 }
+  C->>C: look up r1, resolve alice's waiter`;
+
+This is exactly how request/response *feels* like HTTP again — but built by hand, on top of a stream, with a single correlation field. Wrapping it in a promise makes the call site read like an ordinary `await`.
+
+## A tiny request/reply layer, live
+
+The demo below implements `request()` over the in-page echo socket. Each call generates a fresh `id`, stores a resolver in a `pending` map, and sends the request. When a reply comes back, its echoed `id` finds the right resolver. Two requests go out; the echo delays them differently so the **replies arrive out of order** — and correlation still matches each one correctly. It uses the real `WebSocket` API.
+
+export const reqReplyCode = `(function () {
+  // In-page echo socket with the real WebSocket API. It replies to a 'getUser' request,
+  // echoing the request id, with a small random delay so replies can arrive out of order.
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) {
+      const req = JSON.parse(data);
+      const ages = { alice: 30, bob: 41 };
+      const delay = req.name === 'alice' ? 120 : 30; // alice answers SLOWER than bob
+      setTimeout(() => {
+        if (this.onmessage) {
+          const reply = { type: 'reply', id: req.id, name: req.name, age: ages[req.name] };
+          this.onmessage({ data: JSON.stringify(reply) });
+        }
+      }, delay);
+    }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+  const pending = {};      // id -> resolver function
+  let nextId = 0;
+  let answered = 0;
+
+  // request() returns a promise that resolves when the reply with our id arrives.
+  function request(payload) {
+    return new Promise((resolve) => {
+      const id = 'r' + (++nextId);
+      pending[id] = resolve;
+      ws.send(JSON.stringify(Object.assign({ id: id }, payload)));
+    });
+  }
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    const resolve = pending[msg.id];
+    if (resolve) {
+      delete pending[msg.id];   // one-time use
+      resolve(msg);
+    } else {
+      console.log('unsolicited server push:', msg.type); // no matching id = a push
+    }
+  };
+
+  function done() {
+    answered += 1;
+    if (answered === 2) ws.close();
+  }
+
+  ws.onopen = () => {
+    console.log('asking for alice (slow) and bob (fast)...');
+    request({ type: 'getUser', name: 'alice' }).then((r) => {
+      console.log('alice resolved correctly, age', r.age, '(id ' + r.id + ')');
+      done();
+    });
+    request({ type: 'getUser', name: 'bob' }).then((r) => {
+      console.log('bob resolved correctly, age', r.age, '(id ' + r.id + ')');
+      done();
+    });
+  };
+
+  ws.onclose = () => console.log('both promises resolved to the RIGHT user despite out-of-order replies');
+})();`;
+
+<NodeRunner client:visible code={reqReplyCode} />
+
+Watch the order: bob's reply comes back first because the server answered him faster, yet alice's promise still resolves to alice and bob's to bob. The `id` — not arrival order — is what makes the match. That little `pending` map is the whole trick behind every "RPC over WebSocket" library you will ever use.
+
+A couple of refinements you would add in production: a **timeout** that rejects a pending entry if no reply arrives, and cleanup of the `pending` map if the socket closes so no promise hangs forever.
+
+<Callout title="The one-line takeaway">
+A WebSocket has no built-in request/response — replies and pushes share one stream and can arrive out of order. Put a unique **`id`** on each request, have the server **echo it** on the reply, and keep an *id → waiter* map so every answer finds the question that asked it.
+</Callout>
+
+export const quizReqReply = [
+  {
+    q: 'Why can you not rely on arrival order to match WebSocket replies to requests?',
+    options: [
+      'The transport guarantees strict ordering, so order is reliable',
+      'Replies can arrive out of order and interleave with unsolicited server pushes',
+      'WebSocket drops every second message',
+      'fetch already handles WebSocket correlation for you',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does the correlation-id pattern match a reply to its request?',
+    options: [
+      'The client assumes the first reply answers the first request',
+      'Each request carries a unique id the server echoes on the reply; the client looks it up in a pending map',
+      'The server sorts replies alphabetically',
+      'The WebSocket URL changes per request',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In the demo, why does alice still resolve to alice even though bob replies first?',
+    options: [
+      'Promises always resolve in creation order',
+      'The echoed id, not arrival order, selects the correct waiting resolver',
+      'The echo socket sorts the replies before sending',
+      'Both requests share a single id',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/request-response-over-ws" questions={quizReqReply} />
+
+<ProgressTracker client:visible id="message-design/request-response-over-ws" />

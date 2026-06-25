@@ -1,0 +1,155 @@
+---
+title: 'A WebSocket Server'
+description: 'ลงมือกับไลบรารี ws: WebSocketServer ที่มี port หรือ attach เข้ากับ HTTP server, connection event, ws.on(message), และ ws.send'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ถึงเวลาเขียน server จริงสักตัว ใน Node ไลบรารีโดยพฤตินัยคือ [`ws`](/websocket-design-from-zero-to-hero/th/server-design/) — เล็ก, เร็ว, และใกล้ชิดกับโปรโตคอล บทเรียนนี้จะพาเดินผ่านสามชิ้นส่วนหลักของมัน: การสร้าง server, `connection` event, และการเรียก `message`/`send` ต่อ socket
+
+## การสร้าง server
+
+มีสองวิธีที่พบบ่อยในการตั้ง `WebSocketServer` ขึ้นมา วิธีแรกให้ `ws` เป็นเจ้าของ port โดยตรง:
+
+```ts
+import { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('listening', () => {
+  console.log('listening on ws://localhost:8080');
+});
+```
+
+นั่นเหมาะกับ WebSocket service แบบ standalone อย่างยิ่ง แต่แอปจริงส่วนใหญ่ให้บริการ HTTP อยู่แล้ว — REST API, health check, static files — และต้องการ WebSocket บน port **เดียวกัน** สำหรับกรณีนั้น คุณ attach `ws` เข้ากับ HTTP server ที่มีอยู่แล้วแทน:
+
+```ts
+import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
+
+const server = createServer((req, res) => {
+  res.writeHead(200);
+  res.end('ok'); // ordinary HTTP still works here
+});
+
+// No port here — ws piggybacks on the HTTP server's upgrade events.
+const wss = new WebSocketServer({ server });
+
+server.listen(8080);
+```
+
+ความแตกต่างมีความสำคัญ: ด้วย `{ server }`, HTTP server จะรับ `Upgrade` request แล้วส่งมอบ socket ให้ `ws` ดังนั้น HTTP และ WebSocket จึงใช้ listener ตัวเดียวร่วมกัน ใช้ `{ port }` สำหรับ socket service เฉพาะทาง; ใช้ `{ server }` (หรือ `{ noServer: true }` เพื่อควบคุม upgrade ด้วยมือเต็มที่) เมื่อ WebSocket อยู่ร่วมกับแอป HTTP
+
+<Mermaid title="เส้นทางของ connection จาก upgrade request ไปสู่การจัดการข้อความ" code={flowDiagram} />
+
+export const flowDiagram = `flowchart TB
+  REQ["HTTP request<br/>Upgrade: websocket"] --> WSS["WebSocketServer"]
+  WSS -- "valid upgrade" --> CONN["connection event<br/>(ws, req)"]
+  CONN --> H1["ws.on('message', ...)"]
+  CONN --> H2["ws.send(...)"]
+  CONN --> H3["ws.on('close', ...)"]
+  H1 -- "frame arrives" --> APP["your routing logic"]
+  APP --> H2`;
+
+## connection event
+
+ทุก upgrade ที่รับเข้ามาจะ fire `connection` event หนึ่งครั้ง callback ของมันรับ socket `ws` ที่เพิ่งเชื่อมต่อมาสด ๆ และ upgrade request `req` ตัวต้นฉบับ:
+
+```ts
+wss.on('connection', (ws, req) => {
+  // This runs ONCE per client. Everything here is scoped to that one socket.
+  console.log('a client connected from', req.socket.remoteAddress);
+  ws.send('welcome');
+});
+```
+
+สองสิ่งที่ต้องซึมซับไว้ อย่างแรก handler นี้รัน **หนึ่งครั้งต่อ client** — ถ้ามีคนเชื่อมต่อร้อยคน มันก็ fire ร้อยครั้ง แต่ละครั้งมี `ws` ต่างกัน อย่างที่สอง `req` คือ HTTP upgrade request ซึ่งเป็นที่ที่คุณอ่าน cookie, header, หรือ URL เพื่อหาว่า *ใคร* เพิ่งเชื่อมต่อเข้ามา (เราจะพึ่งสิ่งนี้ในบทเรียนถัดไป)
+
+## การรับและการส่ง
+
+ภายใน connection handler, socket คือ event emitter ฟัง `message` เพื่อรับ frame และเรียก `send` เพื่อ push ข้อมูลกลับ:
+
+```ts
+wss.on('connection', (ws) => {
+  ws.on('message', (data) => {
+    // `data` is a Buffer (or array of Buffers). Convert it to text.
+    const text = data.toString();
+    console.log('received:', text);
+    ws.send(`you said: ${text}`);
+  });
+
+  ws.on('close', (code) => console.log('client gone, code', code));
+  ws.on('error', (err) => console.error('socket error:', err.message));
+});
+```
+
+จุดละเอียดอ่อนหนึ่งที่ทำให้มือใหม่สะดุด: ใน `ws`, payload ของ `message` มาถึงในรูปแบบ **Buffer** ไม่ใช่ string เพราะ frame สามารถพกข้อมูล binary ได้ เรียก `.toString()` เมื่อคุณคาดหวัง text (ถ้าคุณตั้ง `{ binary: false }` หรือใช้ layer สำหรับ parse คุณสามารถเปลี่ยนพฤติกรรมนี้ได้ แต่ค่า default ดิบคือ byte)
+
+## รันของจริงสักตัว
+
+เดโมด้านล่างคือ **body ของ `connection` handler นั้น** ที่รันบน Node `ws` server ของจริง เปิดมันใน StackBlitz จากนั้น `npm run client` เพื่อเชื่อมต่อ มันทักทาย client แต่ละราย, echo ข้อความพร้อม counter, และรายงาน close code
+
+export const serverCode = `// Body of wss.on('connection', (ws, req) => { ... }) — ws/wss/req in scope.
+ws.send('welcome — send me anything');
+
+let count = 0;
+ws.on('message', (data) => {
+  count += 1;
+  const text = data.toString(); // frames arrive as Buffers
+  console.log(\`message #\${count}: \${text}\`);
+  ws.send(\`#\${count} you said: \${text}\`);
+});
+
+ws.on('close', (code) => console.log('client disconnected, code', code));
+ws.on('error', (err) => console.error('socket error:', err.message));`;
+
+<NodeRunner node client:visible code={serverCode} />
+
+ทุกข้อความที่คุณส่งกลับมาพร้อมหมายเลข — เป็นหลักฐานว่าตัวแปร `count` มีชีวิตอยู่ตลอดอายุของ connection หนึ่งนั้น ไม่ใช่ต่อข้อความ scope ต่อ socket นั้นแหละคือสิ่งที่บทเรียนถัดไปจะแปรเปลี่ยนเป็น **state** ต่อ connection ที่มีประโยชน์
+
+<Callout title="ws server ในสามบรรทัด">
+สร้าง server ด้วย `new WebSocketServer({ port })` หรือ `{ server }` เพื่อใช้ HTTP port ร่วมกัน จัดการ client แต่ละรายใน `wss.on('connection', (ws, req) => ...)` ภายในนั้น `ws.on('message', ...)` รับ frame (เป็น Buffer — เรียก `.toString()`) และ `ws.send(...)` push ข้อมูลกลับ
+</Callout>
+
+export const quizServer = [
+  {
+    q: 'เมื่อใดที่คุณควรสร้าง server ด้วย `new WebSocketServer({ server })` แทนที่จะเป็น `{ port }`?',
+    options: [
+      'เมื่อคุณต้องการให้ WebSocket ใช้ port ร่วมกับ HTTP server ที่มีอยู่แล้ว',
+      'เมื่อคุณต้องการ connection ที่เร็วกว่า',
+      'เมื่อ client เป็น browser แทนที่จะเป็น Node',
+      'เมื่อคุณต้องการปิด TLS',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'callback ของ `connection` event รันบ่อยแค่ไหน?',
+    options: [
+      'หนึ่งครั้งสำหรับทั้ง server ตอน startup',
+      'หนึ่งครั้งต่อข้อความที่ได้รับ',
+      'หนึ่งครั้งต่อ client ที่เชื่อมต่อ',
+      'หนึ่งครั้งทุกครั้งที่ส่งข้อมูล',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ในไลบรารี `ws`, argument `data` ของ `message` event เป็น type อะไรโดย default?',
+    options: [
+      'เป็น string เสมอ',
+      'เป็น Buffer (binary) ดังนั้นคุณเรียก .toString() เพื่อให้ได้ text',
+      'เป็น JSON object ที่ parse แล้ว',
+      'เป็น number',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="server-design/a-ws-server" questions={quizServer} />
+
+<ProgressTracker client:visible id="server-design/a-ws-server" />

@@ -1,0 +1,133 @@
+---
+title: 'Message Design'
+description: 'A WebSocket gives you a raw bidirectional stream of bytes and text — you design the message protocol that gives it meaning. An overview and a first JSON-message demo.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The foundations module taught you how to open a connection and push bytes both ways. But a connection that can carry *anything* tells you *nothing* about what those bytes mean. This module — **Message Design** — is where you stop sending raw text and start sending a **protocol**.
+
+## The socket is deliberately empty
+
+Here is the thing nobody tells you when you first reach for a WebSocket: the API hands you `send(data)` and `onmessage(event)`, and that is *all*. The connection is an **opaque pipe**. It will happily carry the string `'hi'`, a stringified JSON object, or a chunk of binary — and it has no opinion about any of them. There is no built-in notion of a "chat message", a "request", an "error", or a "version".
+
+That emptiness is a feature, not an oversight. HTTP bakes in headers, status codes, methods, and content negotiation; a WebSocket bakes in almost nothing so that *you* can design exactly the conversation your application needs. The flip side is responsibility: **whatever structure your messages have, you put it there.**
+
+<Mermaid title="The layers: transport carries bytes, your protocol carries meaning" code={overviewDiagram} />
+
+export const overviewDiagram = `flowchart TB
+  subgraph app["Your application"]
+    a1["chat lines · presence · edits · requests"]
+  end
+  subgraph proto["Your message protocol — THIS module"]
+    p1["type · payload · id · version · schema"]
+  end
+  subgraph ws["WebSocket transport"]
+    w1["send(text or binary) · onmessage"]
+  end
+  app --> proto --> ws
+  ws -- "opaque bytes" --> ws`;
+
+The middle layer is the one with no default. Designing it well is the difference between a protocol you can grow for years and one that becomes a tangle of special-cased strings.
+
+## What this module covers
+
+Five lessons, each adding one essential idea to your message design toolkit:
+
+1. **Message Design (you are here)** — why the socket is empty and you supply the meaning.
+2. **Framing messages** — WebSocket messages are already discrete, but you still need an *application* protocol; one JSON object per message.
+3. **JSON vs binary** — readable and universal JSON versus compact binary formats like MessagePack, Protobuf and CBOR, and when each wins.
+4. **Request/response over WebSocket** — the socket is message-oriented, not request/reply; you add a correlation `id` to match an answer to its question.
+5. **Schemas and versioning** — a message envelope, validating what arrives, and evolving the protocol without breaking older clients.
+
+## A first structured message
+
+Below is the smallest possible step up from sending plain text: sending a **JSON object** and parsing it on the other side. It runs in your browser against an in-page echo socket that uses the real `WebSocket` API — same `onopen`, `onmessage`, `send`, `close` — so there is no server to start. In a real app, only the first line changes to `new WebSocket('wss://your-server')`.
+
+Notice that the moment we send an *object* instead of a bare string, the receiver can ask meaningful questions: *what kind* of message is this? *who* sent it? When?
+
+export const firstJsonCode = `(function () {
+  // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+      }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 50); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+
+  ws.onopen = () => {
+    // We do NOT send a bare string. We send a structured message, serialized to JSON text.
+    const message = { type: 'chat', from: 'alice', text: 'hello protocol', at: '12:00' };
+    console.log('sending object as JSON:', JSON.stringify(message));
+    ws.send(JSON.stringify(message));
+  };
+
+  ws.onmessage = (event) => {
+    // event.data is opaque text. WE decide it is JSON and parse it back into structure.
+    const msg = JSON.parse(event.data);
+    console.log('received a', msg.type, 'message');
+    console.log('  from:', msg.from);
+    console.log('  text:', msg.text);
+    ws.close();
+  };
+
+  ws.onclose = () => console.log('closed — one structured round-trip complete');
+})();`;
+
+<NodeRunner client:visible code={firstJsonCode} />
+
+The socket carried text both ways and never once cared that it was JSON. The structure — `type`, `from`, `text` — exists only because *we* agreed on it and put it there. Every lesson that follows refines that agreement.
+
+<Callout title="The one-line takeaway">
+A WebSocket carries an **opaque stream** of bytes and text with no built-in meaning. The message protocol — types, fields, ids, versions — is something **you design and layer on top**, and this module shows you how.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What meaning does the WebSocket transport give to the data you send?',
+    options: [
+      'It tags every message with a type and a timestamp',
+      'None — it carries opaque bytes and text, and you supply the structure',
+      'It validates messages against a built-in schema',
+      'It converts objects to JSON automatically',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In the demo, why can the receiver tell it got a "chat" message?',
+    options: [
+      'The WebSocket API exposes a message-type header',
+      'Because we serialized a structured object to JSON and parsed it back, reading our own "type" field',
+      'The echo socket added the type field',
+      'JSON messages always include a type by default',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which best describes the role of the message-protocol layer?',
+    options: [
+      'It is provided by the browser and cannot be changed',
+      'It sits between your application and the transport, giving bytes their meaning',
+      'It replaces the WebSocket connection entirely',
+      'It is only needed for binary data',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="message-design/index" />

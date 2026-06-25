@@ -1,0 +1,137 @@
+---
+title: 'การ Framing Messages'
+description: 'WebSocket message มาถึงแบบครบทั้งก้อนและแยกเป็นชิ้น ๆ ต่างจาก TCP byte stream ดิบ ๆ แต่คุณก็ยังต้องมี application protocol อยู่ดี กฎหนึ่ง JSON object ต่อหนึ่ง message พร้อมเดโมสด'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+มีของขวัญละเอียดอ่อนชิ้นหนึ่งที่ WebSocket protocol มอบให้คุณ และมีกับดักละเอียดอ่อนอยู่ข้าง ๆ มันด้วย ของขวัญคือ **message มาถึงครบทั้งก้อน** ส่วนกับดักคือการเชื่อว่าครบทั้งก้อนแปลว่า *มีความหมาย* บทเรียนนี้ว่าด้วยช่องว่างระหว่างสองสิ่งนั้น
+
+## TCP ดิบ ๆ ไม่มี message — แต่ WebSocket มี
+
+ถ้าคุณเคยเขียนโค้ดกับ TCP socket ดิบ ๆ คุณจะรู้ถึงความเจ็บปวด: TCP คือ **byte stream** คุณอาจเรียก `send('{"a":1}')` หนึ่งครั้งที่ฝั่งหนึ่ง แต่อีกฝั่งอาจได้รับ `'{"a'` แล้วตามด้วย `':1}'` หรือได้ทั้งสองก้อนในครั้งเดียวติดกับ message ถัดไป ไม่มีขอบเขตใด ๆ คุณต้องประดิษฐ์ **framing** ขึ้นมาเอง — length prefixes, delimiters หรืออะไรสักอย่าง — เพื่อรู้ว่า message หนึ่งจบตรงไหนและอันถัดไปเริ่มตรงไหน
+
+WebSocket แก้ปัญหานั้นให้คุณแล้ว protocol ทำ framing ให้สตรีมที่ระดับ wire ดังนั้น `onmessage` จึงทำงาน **หนึ่งครั้งต่อหนึ่ง message ที่คุณส่ง** โดย payload มาครบทั้งก้อน หนึ่ง `send` ที่ฝั่งหนึ่งกลายเป็น `onmessage` หนึ่งครั้งพอดีที่อีกฝั่ง
+
+<Mermaid title="TCP ดิบ ๆ ส่งมอบสตรีม ส่วน WebSocket ส่งมอบ message ที่แยกเป็นชิ้น ๆ" code={framingDiagram} />
+
+export const framingDiagram = `flowchart TB
+  subgraph tcp["Raw TCP — a byte stream"]
+    direction LR
+    t1["send A · send B"] --> t2["recv: A+par<br/>recv: t of B"]
+    t2 --> t3["YOU must reframe"]
+  end
+  subgraph wsf["WebSocket — discrete messages"]
+    direction LR
+    w1["send A · send B"] --> w2["onmessage: A<br/>onmessage: B"]
+    w2 --> w3["boundaries already correct"]
+  end`;
+
+ดังนั้นปัญหา framing ระดับล่าง — *message จบตรงไหน* — หายไปแล้ว วิเศษมาก แต่นั่นบอกเพียงว่า **bytes** ถูกจัดกลุ่มอย่างถูกต้อง มันไม่ได้บอกเลยว่า bytes ที่ถูกจัดกลุ่มเหล่านั้น *มีความหมายอะไร*
+
+## คุณยังต้องมี application protocol
+
+นี่คือกับดัก เพราะ message มาถึงครบทั้งก้อน จึงมีแรงดึงดูดให้แค่ `send('user joined: bob')` แล้วถือว่าเสร็จ มันได้ผล — สำหรับ message เพียงชนิดเดียวเท่านั้น ทันทีที่คุณมีชนิดที่สอง ("user left", "new message", "typing…") ฝั่งรับของคุณก็ถูกลดทอนลงเหลือเพียงการดมกลิ่น string อย่างเปราะบาง: *มันขึ้นต้นด้วย "user joined" ไหม? มันมี colon ไหม?* นั่นคือ parser ที่คุณกำลังเขียนด้วยมือโดยไม่ตั้งใจ และเขียนได้แย่ด้วย
+
+วินัยที่ขยายตัวได้นั้นเรียบง่ายและคุ้มค่าที่จะจดจำ:
+
+- **หนึ่ง JSON object ต่อหนึ่ง WebSocket message** อย่าอัด message เชิงตรรกะสองอันเข้าไปใน `send` เดียว และอย่าแยก message เชิงตรรกะหนึ่งอันออกเป็นหลาย ๆ ครั้ง
+- **ทุก message มี field `type`** ฝั่งรับแตกแขนงตาม `type` ไม่ใช่ตามรูปร่างของ string
+- **payload อยู่ใน field ที่มีชื่อ** ดังนั้นการเพิ่มข้อมูลภายหลังจึงไม่เคยทำลายการ parsing ที่มีอยู่เดิม
+
+นี่คือ *application-level framing* ของคุณ: WebSocket ทำ framing ให้ bytes ส่วน field `type` ของคุณทำ framing ให้ *ความหมาย*
+
+## เดโม message ที่มีโครงสร้าง
+
+เดโมส่ง message *ชนิด* ต่าง ๆ สามชนิดผ่าน connection เดียว แต่ละอันเป็น JSON object หนึ่งอันที่มี `type` และฝั่งรับ dispatch ตาม type นั้น — ไม่มีการดมกลิ่น string ที่ใดเลย มันรันในเบราว์เซอร์ของคุณบน echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง
+
+export const framingCode = `(function () {
+  // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
+  class EchoSocket {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => { this.readyState = 1; if (this.onopen) this.onopen({}); }, 50);
+    }
+    send(data) { setTimeout(() => { if (this.onmessage) this.onmessage({ data: data }); }, 40); }
+    close(code) { this.readyState = 3; setTimeout(() => { if (this.onclose) this.onclose({ code: code || 1000 }); }, 10); }
+  }
+
+  const ws = new EchoSocket();
+
+  // Helper: always one JSON object per send.
+  function emit(type, payload) {
+    ws.send(JSON.stringify(Object.assign({ type: type }, payload)));
+  }
+
+  let seen = 0;
+  ws.onopen = () => {
+    emit('join', { user: 'bob' });
+    emit('chat', { user: 'bob', text: 'hi everyone' });
+    emit('typing', { user: 'bob' });
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    // Dispatch on type — never on string shape.
+    if (msg.type === 'join') console.log(msg.user, 'joined the room');
+    else if (msg.type === 'chat') console.log(msg.user, 'says:', msg.text);
+    else if (msg.type === 'typing') console.log(msg.user, 'is typing...');
+    else console.log('unknown message type:', msg.type);
+
+    seen += 1;
+    if (seen === 3) ws.close();
+  };
+
+  ws.onclose = () => console.log('three distinct message types, one clean dispatch, done');
+})();`;
+
+<NodeRunner client:visible code={framingCode} />
+
+สาม `send` กลายเป็น `onmessage` สามครั้ง — WebSocket รักษาขอบเขตให้สมบูรณ์แบบ และเพราะแต่ละ message ประกาศ `type` ของตน ฝั่งรับจึงจัดการทั้งสามชนิดด้วย `if/else` ที่สะอาดแทนที่จะเดาจาก text เพิ่ม message ชนิดที่สี่ในวันพรุ่งนี้ แล้วมีเพียงแขนงใหม่หนึ่งแขนงเท่านั้นที่เปลี่ยนแปลง
+
+<Callout title="ใจความสำคัญในหนึ่งบรรทัด">
+WebSocket ทำ framing ให้ **bytes** ของคุณแล้ว — หนึ่ง `send` คือหนึ่ง `onmessage` แต่คุณยังต้องทำ framing ให้ **ความหมาย**: ส่งหนึ่ง JSON object ต่อหนึ่ง message พอดี ให้ทุก message มี `type` และ dispatch ตาม type นั้น
+</Callout>
+
+export const quizFraming = [
+  {
+    q: 'การส่งมอบ message ของ WebSocket ต่างจาก TCP ดิบ ๆ อย่างไร?',
+    options: [
+      'WebSocket ก็เป็น byte stream ดิบ ๆ ที่ไม่มีขอบเขตเช่นกัน',
+      'WebSocket ส่งมอบ message ครบทั้งก้อนแบบแยกเป็นชิ้น ๆ — หนึ่ง send กลายเป็นหนึ่ง onmessage',
+      'WebSocket รับประกันว่า message เป็น JSON',
+      'WebSocket จัดลำดับ message ใหม่เพื่อประสิทธิภาพ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในเมื่อ message มาถึงครบทั้งก้อนอยู่แล้ว ทำไมยังต้องออกแบบ application protocol?',
+    options: [
+      'เพื่อแยก message ที่ TCP รวมเข้าด้วยกันออกใหม่',
+      'เพราะ bytes ครบก้อนยังไม่มีความหมายที่ตกลงกันไว้ — คุณต้องมี types และ field ที่มีชื่อเพื่อจัดการ message มากกว่าหนึ่งชนิด',
+      'เพราะ onmessage ทำงานมากกว่าหนึ่งครั้งต่อหนึ่ง message',
+      'มันจำเป็นเฉพาะกับ binary frame เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'วินัยการ framing ที่แนะนำในบทเรียนนี้คืออะไร?',
+    options: [
+      'อัด message เชิงตรรกะหลายอันเข้าไปใน send เดียวเพื่อประหยัด bandwidth',
+      'หนึ่ง JSON object ต่อหนึ่ง message แต่ละอันมี field type ที่ฝั่งรับ dispatch ตาม',
+      'ใช้ string เปล่า ๆ คั่นด้วย newline แล้วดมกลิ่นจาก prefix ของมัน',
+      'แยกแต่ละ message ออกเป็นหลาย ๆ send',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="message-design/framing-messages" questions={quizFraming} />
+
+<ProgressTracker client:visible id="message-design/framing-messages" />

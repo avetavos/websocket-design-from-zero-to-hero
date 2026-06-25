@@ -1,0 +1,141 @@
+---
+title: 'TLS and DoS'
+description: 'ใช้ wss/TLS เสมอ, การจำกัดการเชื่อมต่อต่อ IP, slowloris และ handshake flood, การ authenticate ก่อนจัดสรรทรัพยากร, และ idle timeout'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+บทเรียนที่ผ่านมาป้องกัน *message รายตัวบนการเชื่อมต่อ* บทเรียนสุดท้ายนี้ซูมออกไปยังชั้นการเชื่อมต่อเอง: bytes บนสาย และอันตรายของการปล่อยให้การเชื่อมต่อมากเกินไป — หรือการเชื่อมต่อที่ทำไม่เสร็จมากเกินไป — สะสมกองพะเนิน มีสองธีมที่วิ่งผ่านมัน: **เข้ารหัสทุกอย่าง** ด้วย TLS, และ **อย่าใช้ทรัพยากรก่อนที่คุณจะรู้ว่าการเชื่อมต่อนั้นคุ้มค่า**
+
+## ใช้ `wss` เสมอ — TLS ต่อรองไม่ได้
+
+WebSocket สืบทอดความปลอดภัยจาก scheme ที่มันเปิดบน `ws://` คือ plaintext: handshake, auth token ของคุณ, และทุก frame เดินทางเป็น cleartext ที่ router, proxy, หรือ peer บน Wi-Fi ร้านกาแฟใด ๆ ระหว่างไคลเอนต์และเซิร์ฟเวอร์อ่านหรือเขียนทับได้ `wss://` ห่อทั้งหมดไว้ใน TLS เหมือนกับที่ `https://` ทำให้ HTTP เป๊ะ ๆ กฎนั้นเรียบง่ายและเด็ดขาด:
+
+- ใช้ **`wss://`** ใน production เสมอ Terminate TLS ที่ load balancer ของคุณหรือในเซิร์ฟเวอร์โดยตรง
+- หน้าเว็บที่เสิร์ฟผ่าน **`https://` เปิดการเชื่อมต่อ `ws://` ไม่ได้** — เบราว์เซอร์บล็อกมันเป็น mixed content ดังนั้นเมื่อไซต์ของคุณอยู่บน HTTPS (มันอยู่) `wss` ก็เป็นตัวเลือกเดียวที่ใช้งานได้อยู่แล้ว
+- จงมอง `ws://` เป็นความสะดวกในการพัฒนาบน localhost เท่านั้น ไม่มีอะไรมากกว่านั้น
+
+```ts
+// Production: TLS-terminated WebSocket server.
+import { createServer } from 'node:https';
+import { readFileSync } from 'node:fs';
+import { WebSocketServer } from 'ws';
+
+const server = createServer({
+  cert: readFileSync('/etc/tls/fullchain.pem'),
+  key: readFileSync('/etc/tls/privkey.pem'),
+});
+// maxPayload caps frame size at the protocol level (see the previous lesson).
+const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
+server.listen(443);
+```
+
+## Denial of service ระดับการเชื่อมต่อ
+
+Rate limiting จำกัด message *ภายใน* การเชื่อมต่อ แต่ผู้โจมตีก็โจมตีคุณด้วยตัวการเชื่อมต่อ *เอง* ได้เช่นกัน:
+
+- **Connection flood** เปิด socket หลายพันจาก IP เดียวหรือไม่กี่ IP socket ที่เปิดแต่ละอันกิน memory และ file descriptor; ถ้ามากพอก็ทำให้เซิร์ฟเวอร์หมดก่อนที่จะส่ง message สักอัน
+- **Slowloris / slow handshake** เริ่มการอัปเกรด HTTP แต่ส่ง bytes ของคำขอทีละนิดอย่างเชื่องช้า หรือไม่ทำให้จบเลย เซิร์ฟเวอร์ที่ถือการเชื่อมต่อเปิดค้างรออยู่จะกินช่องหนึ่งต่อผู้โจมตีหนึ่งคนฟรี ๆ การป้องกันคือ **handshake timeout**: ถ้าการอัปเกรดไม่เสร็จภายในไม่กี่วินาที ก็ทิ้งมัน
+- **Idle hoarding** เปิด socket, authenticate, แล้วเงียบไปตลอดกาล — ผูกทรัพยากรไว้ในขณะที่ไม่ทำอะไรเลย **heartbeat บวก idle timeout** ทวงคืนพวกนี้ได้: ping เป็นระยะ และปิดการเชื่อมต่อใด ๆ ที่ pong ไม่กลับหรือไม่ส่งอะไรมานานเกินไป
+
+<Mermaid title="การจำกัดการเชื่อมต่อ: limit, time out handshake, authenticate ก่อนจัดสรร" code={dosDiagram} />
+
+export const dosDiagram = `flowchart TB
+  N["New TCP / upgrade attempt"] --> IP{"Connections from<br/>this IP < limit?"}
+  IP -- "no" --> R1["Refuse — protect capacity"]
+  IP -- "yes" --> HT{"Handshake completes<br/>within timeout?"}
+  HT -- "no (slowloris)" --> R2["Drop — reclaim slot"]
+  HT -- "yes" --> AU{"Authenticated?"}
+  AU -- "no" --> R3["Close 1008 — before allocating state"]
+  AU -- "yes" --> AL["Allocate per-connection state<br/>+ start heartbeat / idle timeout"]`;
+
+## Authenticate ก่อนที่คุณจะจัดสรร
+
+หลักการที่สำคัญที่สุดเพียงข้อเดียวตรงนี้คือ **ลำดับ** ทำการปฏิเสธที่ราคาถูกก่อน และใช้ทรัพยากรเป็นอย่างสุดท้าย การเชื่อมต่อที่ยังไม่ authenticate หรือ origin ผิดควรถูกปิด *ก่อน* ที่คุณจะจัดสรร session object ของมัน, ลงทะเบียนมันในห้องของคุณ, subscribe มันเข้ากับ pub/sub backend ของคุณ, หรือ buffer อะไรให้มัน ถ้าคุณจัดสรรก่อนแล้วค่อยตรวจทีหลัง ผู้โจมตีที่ถูกปฏิเสธทุกคนก็ยังทำให้คุณเสีย setup เต็มรูปแบบไปแล้ว — ซึ่งเป็น resource exhaustion ที่คุณกำลังพยายามป้องกันพอดี ท่อนี้เป็นแบบนี้เสมอ: **IP/connection limit → handshake timeout → origin check → authenticate → ตอนนี้ค่อยจัดสรร state**
+
+## Per-IP limit และ idle timeout ในทางปฏิบัติ
+
+ภาพร่างด้านล่างแสดงรูปร่างของ connection-handler: counter ราย IP ที่ปฏิเสธการเชื่อมต่อส่วนเกิน, การ cleanup counter นั้นทันทีตอน close, และ idle timeout ที่ขับด้วย heartbeat ซึ่งปิด socket ที่ตายแล้ว นี่เป็น `ts` มากกว่าจะเป็นเดโมที่รันได้เพราะมันขึ้นอยู่กับเครือข่ายจริงและนาฬิกาจริง — แต่มันหย่อนลงในเซิร์ฟเวอร์ `ws` ได้ตรง ๆ
+
+```ts
+const MAX_PER_IP = 20;
+const perIp = new Map<string, number>();
+
+wss.on('connection', (ws, req) => {
+  const ip = req.socket.remoteAddress ?? 'unknown';
+
+  // 1. Per-IP connection limit — refuse BEFORE allocating anything.
+  const count = perIp.get(ip) ?? 0;
+  if (count >= MAX_PER_IP) {
+    ws.close(1008, 'too many connections');
+    return;
+  }
+  perIp.set(ip, count + 1);
+
+  // 2. (origin + auth checks happen here — see earlier lessons)
+
+  // 3. Heartbeat + idle timeout: reclaim dead/silent sockets.
+  let alive = true;
+  ws.on('pong', () => { alive = true; });
+  const beat = setInterval(() => {
+    if (!alive) { ws.terminate(); return; } // no pong since last beat → kill
+    alive = false;
+    ws.ping();
+  }, 30_000);
+
+  // 4. Always clean up on close — release the IP slot and the timer.
+  ws.on('close', () => {
+    clearInterval(beat);
+    perIp.set(ip, (perIp.get(ip) ?? 1) - 1);
+  });
+});
+```
+
+handshake timeout เองอยู่สูงขึ้นไปหนึ่งระดับ บน HTTP server (`server.headersTimeout` / `server.requestTimeout`) ดังนั้น slowloris upgrade จะถูกทิ้งก่อนที่มันจะไปถึง handler นี้ด้วยซ้ำ เมื่อรวมกันสิ่งเหล่านี้จำกัด *จำนวนเท่าไร* ของการเชื่อมต่อที่มีอยู่, *นานแค่ไหน* ที่อันที่ยังไม่เสร็จจะค้างอยู่ได้, และ *นานแค่ไหน* ที่อัน idle จะรอดอยู่ได้ — ปิดช่องว่างสุดท้ายที่ผู้โจมตีจะใช้ประโยชน์ได้
+
+<Callout title="เข้ารหัสทุกอย่าง; ปฏิเสธให้ราคาถูก จัดสรรให้สาย">
+รันบน **`wss`/TLS** เท่านั้น จำกัดการเชื่อมต่อ ไม่ใช่แค่ message: **จำกัดการเชื่อมต่อต่อ IP**, **time out handshake ที่ช้า/ไม่เสร็จ** (slowloris), และใช้ **heartbeat พร้อม idle timeout** เพื่อทวงคืน socket ที่ตายแล้ว เหนือสิ่งอื่นใด **authenticate ก่อนที่คุณจะจัดสรร** — ทุกทรัพยากรราย connection ควรถูกใช้หลังจาก origin และ credential ผ่านแล้วเท่านั้น เพื่อที่ผู้โจมตีที่ถูกปฏิเสธจะทำให้คุณเสียอะไรแทบไม่เลย
+</Callout>
+
+export const quizTls = [
+  {
+    q: 'Why must production WebSockets use wss:// rather than ws://?',
+    options: [
+      'wss is faster than ws',
+      'ws sends the handshake, token, and frames as cleartext, and https pages are blocked from opening ws connections as mixed content',
+      'ws does not support binary frames',
+      'wss disables the same-origin policy',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What defends against a slowloris-style slow handshake attack?',
+    options: [
+      'A larger maxPayload',
+      'A handshake/request timeout that drops upgrades that do not complete in time',
+      'Disabling TLS',
+      'Authorizing every message',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the correct ordering to avoid wasting resources on bad connections?',
+    options: [
+      'Allocate the session first, then check origin and auth',
+      'Limit per IP, time out the handshake, check origin, authenticate — and only then allocate per-connection state',
+      'Authenticate only after the first message is processed',
+      'Allocate state for every connection and clean up later',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="security/tls-and-dos" questions={quizTls} />
+
+<ProgressTracker client:visible id="security/tls-and-dos" />
