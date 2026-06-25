@@ -14,10 +14,19 @@ describe('buildJsSrcdoc', () => {
 });
 
 describe('buildNodeProject', () => {
-  it('puts the snippet at index.js with a node template', () => {
-    const p = buildNodeProject("console.log(1)");
-    expect(p.files['index.js']).toBe('console.log(1)');
+  it('builds a ws server starter mounting the lesson code in the connection handler', () => {
+    const p = buildNodeProject("ws.send('pong');");
     expect(p.template).toBe('node');
+    // lesson code is embedded inside server.ts's connection handler
+    expect(p.files['server.ts']).toContain("ws.send('pong');");
+    expect(p.files['server.ts']).toContain('WebSocketServer');
+    expect(p.files['server.ts']).toContain("wss.on('connection'");
+    // package.json wires up ws + @types/ws + a tsx start script
     expect(p.files['package.json']).toContain('"type": "module"');
+    expect(p.files['package.json']).toContain('"ws"');
+    expect(p.files['package.json']).toContain('@types/ws');
+    expect(p.files['package.json']).toContain('tsx server.ts');
+    // a client is provided to connect, send, and log
+    expect(p.files['client.ts']).toContain('new WebSocket');
   });
 });
