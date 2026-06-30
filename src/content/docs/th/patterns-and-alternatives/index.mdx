@@ -52,7 +52,7 @@ export const chooseDiagram = `flowchart TD
 
 ## สิ่งนี้เข้ากับภาพรวมตรงไหน
 
-ทุกอย่างก่อนหน้านี้เป็นชิ้นส่วนประกอบ ส่วนโมดูลนี้คือคู่มือการประกอบ ถ้าแนวคิดตรงนี้รู้สึกบางไป รากฐานอยู่ห่างออกไปแค่คลิกเดียว: [client API](/websocket-design-from-zero-to-hero/th/the-client-api/), [message design](/websocket-design-from-zero-to-hero/th/message-design/), [connection lifecycle](/websocket-design-from-zero-to-hero/th/connection-lifecycle/), [server design](/websocket-design-from-zero-to-hero/th/server-design/) และ [scaling with pub/sub](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/) ทั้งหมดป้อนเข้าสู่สิ่งที่เราจะสร้างต่อไปโดยตรง
+ทุกอย่างก่อนหน้านี้เป็นชิ้นส่วนประกอบ ส่วนโมดูลนี้คือคู่มือการประกอบ ถ้าแนวคิดตรงนี้รู้สึกบางไป รากฐานอยู่ห่างออกไปแค่คลิกเดียว: [client API](/websocket/th/the-client-api/), [message design](/websocket/th/message-design/), [connection lifecycle](/websocket/th/connection-lifecycle/), [server design](/websocket/th/server-design/) และ [scaling with pub/sub](/websocket/th/scaling-and-pubsub/) ทั้งหมดป้อนเข้าสู่สิ่งที่เราจะสร้างต่อไปโดยตรง
 
 <Callout title="การเปลี่ยนมุมมองทางความคิด">
 หยุดถามว่า "ฉันจะใช้ WebSocket อย่างไร?" แล้วเริ่มถามว่า "traffic ของฉันมีรูปร่างแบบไหน?" ฟีเจอร์ส่วนใหญ่คือ **pub/sub**, **RPC** หรือ **fire-and-forget** — และบางส่วนก็ไม่ต้องใช้ WebSocket เลยด้วยซ้ำ การเลือก pattern และ transport ที่ถูกต้องตั้งแต่ต้นคือส่วนใหญ่ของงานออกแบบ

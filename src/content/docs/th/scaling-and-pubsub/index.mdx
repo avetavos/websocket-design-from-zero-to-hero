@@ -55,10 +55,10 @@ client 1 โพสต์ข้อความ Instance A ส่งให้ clie
 
 การแก้ปัญหานี้ส่วนใหญ่เป็นแบบฝึกหัดด้าน architecture ดังนั้นบทเรียนจึงพึ่งพา diagram และ TypeScript ขนาดเล็กมากกว่า server ที่รันได้ตัวเดียว เส้นทางคือ:
 
-- **[ทำไม scaling จึงยาก](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/why-scaling-is-hard)** — connection state ใน memory, ต้นทุนต่อ connection, การ balance connection ที่มีอายุยืน และปัญหา cross-instance broadcast ที่ระบุไว้อย่างแม่นยำ
-- **[pub/sub backplane](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/pubsub-backplane)** — วาง bus ที่แชร์กัน (Redis pub/sub, NATS, Kafka) ไว้ระหว่าง instance เพื่อให้ทุกข้อความที่ publish ไปถึงทุก instance ซึ่งจากนั้นจะ fan-out ไปยัง client ภายในของตัวเอง พร้อม demo ในหน้าของสอง instance ที่แชร์ bus เดียวกัน
-- **[Presence ข้าม instance](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/presence)** — การติดตามว่าใครออนไลน์อยู่เมื่อ "ออนไลน์" กระจายอยู่ตามเครื่องต่าง ๆ: shared store, heartbeat, การหมดอายุ และ reconnect stampede
-- **[Sticky vs stateless](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/sticky-vs-stateless)** — route client กลับไปยัง instance ของมัน หรือปล่อยให้ instance ใดก็ได้ให้บริการจาก shared state และวิธีตั้งค่า load balancer ในแต่ละแบบ
+- **[ทำไม scaling จึงยาก](/websocket/th/scaling-and-pubsub/why-scaling-is-hard)** — connection state ใน memory, ต้นทุนต่อ connection, การ balance connection ที่มีอายุยืน และปัญหา cross-instance broadcast ที่ระบุไว้อย่างแม่นยำ
+- **[pub/sub backplane](/websocket/th/scaling-and-pubsub/pubsub-backplane)** — วาง bus ที่แชร์กัน (Redis pub/sub, NATS, Kafka) ไว้ระหว่าง instance เพื่อให้ทุกข้อความที่ publish ไปถึงทุก instance ซึ่งจากนั้นจะ fan-out ไปยัง client ภายในของตัวเอง พร้อม demo ในหน้าของสอง instance ที่แชร์ bus เดียวกัน
+- **[Presence ข้าม instance](/websocket/th/scaling-and-pubsub/presence)** — การติดตามว่าใครออนไลน์อยู่เมื่อ "ออนไลน์" กระจายอยู่ตามเครื่องต่าง ๆ: shared store, heartbeat, การหมดอายุ และ reconnect stampede
+- **[Sticky vs stateless](/websocket/th/scaling-and-pubsub/sticky-vs-stateless)** — route client กลับไปยัง instance ของมัน หรือปล่อยให้ instance ใดก็ได้ให้บริการจาก shared state และวิธีตั้งค่า load balancer ในแต่ละแบบ
 
 <Callout title="ปัญหาหลักในบรรทัดเดียว">
 WebSocket connection อยู่ใน memory ของ process เพียงตัวเดียวเท่านั้น ดังนั้น broadcast จึงไปถึงได้แค่ client ที่ process นั้นถือไว้เองเท่านั้น การ scale real-time ส่วนใหญ่คืองานของการให้ instance มีวิธีแชร์ข้อความที่มันมองไม่เห็นโดยตรง

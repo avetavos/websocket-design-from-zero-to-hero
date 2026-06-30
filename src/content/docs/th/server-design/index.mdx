@@ -61,7 +61,7 @@ export const hubDiagram = `flowchart TB
 
 ## server ที่รันได้จริงตัวแรก
 
-เดโมในโมดูลนี้คือ **Node server จริง** ที่สร้างบนไลบรารี [`ws`](/websocket-design-from-zero-to-hero/th/the-client-api/) — ไลบรารี WebSocket ที่ใช้กันแพร่หลายที่สุดสำหรับ Node เปิดอันใดก็ได้ใน **StackBlitz** เพื่อรัน `WebSocketServer` ของจริง จากนั้น `npm run client` ใน terminal ที่สองเพื่อเชื่อมต่อ
+เดโมในโมดูลนี้คือ **Node server จริง** ที่สร้างบนไลบรารี [`ws`](/websocket/th/the-client-api/) — ไลบรารี WebSocket ที่ใช้กันแพร่หลายที่สุดสำหรับ Node เปิดอันใดก็ได้ใน **StackBlitz** เพื่อรัน `WebSocketServer` ของจริง จากนั้น `npm run client` ใน terminal ที่สองเพื่อเชื่อมต่อ
 
 ตลอดทั้งโมดูลนี้ โค้ดที่คุณเห็นคือ **body ของ connection handler** — มันรันหนึ่งครั้งต่อ client ที่เชื่อมต่อ โดยมีสาม identifier อยู่ใน scope แล้ว: `ws` (socket ของ client รายนี้), `wss` (server, ใช้สำหรับ broadcast), และ `req` (upgrade request) ตัวอย่างด้านล่างทักทาย client ใหม่แต่ละราย, echo สิ่งที่พวกเขาส่งมา, และ log เมื่อพวกเขาจากไป
 

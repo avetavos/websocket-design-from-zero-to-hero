@@ -29,12 +29,12 @@ export const appDiagram = `flowchart TD
   beat -- "no pong" --> dead["terminate dead socket"]
   route -- "client gone" --> clean["close -> leave all rooms"]`;
 
-Each box maps to a module you have already done: auth is [security](/websocket-design-from-zero-to-hero/en/security/), per-connection state and rooms are [server design](/websocket-design-from-zero-to-hero/en/server-design/), heartbeats are the [connection lifecycle](/websocket-design-from-zero-to-hero/en/connection-lifecycle/), and the message envelope is [message design](/websocket-design-from-zero-to-hero/en/message-design/). The capstone is just the wiring.
+Each box maps to a module you have already done: auth is [security](/websocket/en/security/), per-connection state and rooms are [server design](/websocket/en/server-design/), heartbeats are the [connection lifecycle](/websocket/en/connection-lifecycle/), and the message envelope is [message design](/websocket/en/message-design/). The capstone is just the wiring.
 
 ## The four ingredients
 
-- **Auth on connect.** Reject unauthenticated sockets immediately with a custom close code so the client knows not to blindly retry. Here we read a simple token from the upgrade request URL; in production it would be a verified session or JWT (see the [security module](/websocket-design-from-zero-to-hero/en/security/)).
-- **Rooms.** Each connection carries a `Set` of rooms it has joined. A chat message is delivered only to other sockets in the same room — the [pub/sub pattern](/websocket-design-from-zero-to-hero/en/patterns-and-alternatives/pubsub-and-rooms/) from earlier in this module, scoped to a group.
+- **Auth on connect.** Reject unauthenticated sockets immediately with a custom close code so the client knows not to blindly retry. Here we read a simple token from the upgrade request URL; in production it would be a verified session or JWT (see the [security module](/websocket/en/security/)).
+- **Rooms.** Each connection carries a `Set` of rooms it has joined. A chat message is delivered only to other sockets in the same room — the [pub/sub pattern](/websocket/en/patterns-and-alternatives/pubsub-and-rooms/) from earlier in this module, scoped to a group.
 - **Heartbeats.** TCP can go silent without an error event — a laptop sleeps, a phone loses signal. A periodic `ping` with an expected `pong` is how the server learns a connection is actually dead and reclaims it, instead of broadcasting forever into a void.
 - **Reconnect-friendliness.** The server cannot reconnect for the client, but it can make reconnection cheap: a clean, idempotent `join` so a returning client just re-announces its rooms, and stable close codes so the client knows whether to retry (transient) or stop (auth failure).
 
@@ -138,7 +138,7 @@ To exercise rooms properly, connect two clients with different tokens (e.g. `?to
 
 ## What you have built
 
-Step back and notice what this small file is: a complete, defensible real-time service. It refuses anonymous sockets, routes by room instead of blasting everyone, survives clients that vanish without a `close`, and speaks a typed protocol a reconnecting client can resume against. Every one of those properties came from a separate module — and assembling them is exactly the skill this course set out to teach. From here, scaling it across instances is the [pub/sub fan-out](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/) you already met; everything else is product.
+Step back and notice what this small file is: a complete, defensible real-time service. It refuses anonymous sockets, routes by room instead of blasting everyone, survives clients that vanish without a `close`, and speaks a typed protocol a reconnecting client can resume against. Every one of those properties came from a separate module — and assembling them is exactly the skill this course set out to teach. From here, scaling it across instances is the [pub/sub fan-out](/websocket/en/scaling-and-pubsub/) you already met; everything else is product.
 
 <Callout title="The capstone in one line">
 A production-shaped real-time service is **auth on connect**, **rooms** for routing, **heartbeats** to detect dead links, and a **typed, reconnect-friendly protocol** — each a module you have already done, wired together over one `ws` server.

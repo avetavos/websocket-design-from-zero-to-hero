@@ -6,11 +6,11 @@ hero:
   tagline: A standalone, beginner→advanced course on designing real-time systems with WebSockets, taught with TypeScript. From the handshake to message design, heartbeats & reconnection, server design, scaling, and security — with the real WebSocket API running in the browser.
   actions:
     - text: Start here
-      link: /websocket-design-from-zero-to-hero/en/websocket-foundations/
+      link: /websocket/en/websocket-foundations/
       icon: right-arrow
       variant: primary
     - text: Jump to the Client API
-      link: /websocket-design-from-zero-to-hero/en/the-client-api/
+      link: /websocket/en/the-client-api/
       icon: open-book
 ---
 
@@ -20,28 +20,28 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 <CardGrid>
   <Card title="WebSocket Foundations" icon="rocket">
-    What WebSockets are, the upgrade handshake, frames, and how they differ from HTTP. [Start →](/websocket-design-from-zero-to-hero/en/websocket-foundations/)
+    What WebSockets are, the upgrade handshake, frames, and how they differ from HTTP. [Start →](/websocket/en/websocket-foundations/)
   </Card>
   <Card title="The Client API" icon="seti:plan">
-    new WebSocket, events & readyState, sending/receiving, binary data. [Connect →](/websocket-design-from-zero-to-hero/en/the-client-api/)
+    new WebSocket, events & readyState, sending/receiving, binary data. [Connect →](/websocket/en/the-client-api/)
   </Card>
   <Card title="Message Design" icon="seti:json">
-    Framing, JSON vs binary, request/response with correlation ids, versioning. [Design →](/websocket-design-from-zero-to-hero/en/message-design/)
+    Framing, JSON vs binary, request/response with correlation ids, versioning. [Design →](/websocket/en/message-design/)
   </Card>
   <Card title="Connection Lifecycle" icon="seti:clock">
-    Heartbeats, detecting dead connections, reconnection with backoff, close codes. [Keep alive →](/websocket-design-from-zero-to-hero/en/connection-lifecycle/)
+    Heartbeats, detecting dead connections, reconnection with backoff, close codes. [Keep alive →](/websocket/en/connection-lifecycle/)
   </Card>
   <Card title="Server Design" icon="seti:config">
-    The ws library, connection state, rooms & broadcast, backpressure. [Serve →](/websocket-design-from-zero-to-hero/en/server-design/)
+    The ws library, connection state, rooms & broadcast, backpressure. [Serve →](/websocket/en/server-design/)
   </Card>
   <Card title="Scaling & Pub/Sub" icon="random">
-    Why one process won't scale, a pub/sub backplane, presence, sticky vs stateless. [Scale →](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/)
+    Why one process won't scale, a pub/sub backplane, presence, sticky vs stateless. [Scale →](/websocket/en/scaling-and-pubsub/)
   </Card>
   <Card title="Security" icon="approve-check">
-    Origin & handshake auth, authorization, rate limiting, TLS & DoS. [Secure →](/websocket-design-from-zero-to-hero/en/security/)
+    Origin & handshake auth, authorization, rate limiting, TLS & DoS. [Secure →](/websocket/en/security/)
   </Card>
   <Card title="Patterns & Alternatives" icon="puzzle">
-    Pub/sub & rooms, RPC over WS, WS vs SSE vs WebTransport, a working app. [Apply →](/websocket-design-from-zero-to-hero/en/patterns-and-alternatives/)
+    Pub/sub & rooms, RPC over WS, WS vs SSE vs WebTransport, a working app. [Apply →](/websocket/en/patterns-and-alternatives/)
   </Card>
 </CardGrid>
 

@@ -55,10 +55,10 @@ Client 1 posts a message. Instance A faithfully delivers it to client 2, who is 
 
 Solving this is mostly an architecture exercise, so the lessons lean on diagrams and small TypeScript sketches rather than a single runnable server. The path:
 
-- **[Why scaling is hard](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/why-scaling-is-hard)** — connection state in memory, the per-connection cost, balancing long-lived connections, and the cross-instance broadcast problem stated precisely.
-- **[A pub/sub backplane](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/pubsub-backplane)** — put a shared bus (Redis pub/sub, NATS, Kafka) between instances so every published message reaches every instance, which then fans out to its own local clients. With an in-page demo of two instances sharing one bus.
-- **[Presence across instances](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/presence)** — tracking who is online when "online" is scattered across machines: a shared store, heartbeats, expiry, and the reconnect stampede.
-- **[Sticky vs stateless](/websocket-design-from-zero-to-hero/en/scaling-and-pubsub/sticky-vs-stateless)** — route a client back to its instance, or let any instance serve it from shared state, and how to configure the load balancer either way.
+- **[Why scaling is hard](/websocket/en/scaling-and-pubsub/why-scaling-is-hard)** — connection state in memory, the per-connection cost, balancing long-lived connections, and the cross-instance broadcast problem stated precisely.
+- **[A pub/sub backplane](/websocket/en/scaling-and-pubsub/pubsub-backplane)** — put a shared bus (Redis pub/sub, NATS, Kafka) between instances so every published message reaches every instance, which then fans out to its own local clients. With an in-page demo of two instances sharing one bus.
+- **[Presence across instances](/websocket/en/scaling-and-pubsub/presence)** — tracking who is online when "online" is scattered across machines: a shared store, heartbeats, expiry, and the reconnect stampede.
+- **[Sticky vs stateless](/websocket/en/scaling-and-pubsub/sticky-vs-stateless)** — route a client back to its instance, or let any instance serve it from shared state, and how to configure the load balancer either way.
 
 <Callout title="The core problem in one line">
 A WebSocket connection lives in the memory of exactly one process, so a broadcast can only reach the clients that process personally holds. Scaling real-time is mostly the work of giving instances a way to share messages they cannot see directly.

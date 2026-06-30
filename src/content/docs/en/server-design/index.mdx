@@ -61,7 +61,7 @@ This module — **Server Design** — builds the server-side half of your WebSoc
 
 ## A first live server
 
-The demos in this module are **real Node servers** built on the [`ws`](/websocket-design-from-zero-to-hero/en/the-client-api/) library — the most widely used WebSocket library for Node. Open any of them in **StackBlitz** to run a genuine `WebSocketServer`, then `npm run client` in a second terminal to connect.
+The demos in this module are **real Node servers** built on the [`ws`](/websocket/en/the-client-api/) library — the most widely used WebSocket library for Node. Open any of them in **StackBlitz** to run a genuine `WebSocketServer`, then `npm run client` in a second terminal to connect.
 
 Throughout this module, the code you see is the **body of the connection handler** — it runs once per connected client, with three identifiers already in scope: `ws` (this client's socket), `wss` (the server, for broadcast), and `req` (the upgrade request). The example below greets each new client, echoes whatever they send, and logs when they leave.
 

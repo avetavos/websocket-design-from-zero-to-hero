@@ -121,7 +121,7 @@ export const pubsubDemoCode = `(function () {
 
 ## ทำไมมันถึงสเกลได้
 
-broker ถือ `Map` จาก topic ไปยัง set ของ socket การส่ง event แตะเฉพาะ socket ใน set เดียวเท่านั้น ไม่เคยแตะตารางการเชื่อมต่อทั้งหมด นั่นคือเหตุผลที่ pub/sub สเกลตาม *ความสนใจ* แทนที่จะตาม *จำนวนการเชื่อมต่อทั้งหมด*: แอปที่มีผู้ใช้แสนคนซึ่งแต่ละคนดูสาม topic ก็ยังส่งแต่ละ event ให้แค่ไม่กี่คนที่ขอ และเมื่อต่อมาคุณรันเซิร์ฟเวอร์หลาย instance โมเดลเดียวกันก็ขยายออกไปได้ — broker ที่ใช้ร่วมกัน (Redis, NATS, message bus) กระจายการ publish ข้าม instance ซึ่งก็คือ [pattern การสเกล](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/) ที่คุณเห็นมาก่อนหน้านี้เป๊ะ ๆ
+broker ถือ `Map` จาก topic ไปยัง set ของ socket การส่ง event แตะเฉพาะ socket ใน set เดียวเท่านั้น ไม่เคยแตะตารางการเชื่อมต่อทั้งหมด นั่นคือเหตุผลที่ pub/sub สเกลตาม *ความสนใจ* แทนที่จะตาม *จำนวนการเชื่อมต่อทั้งหมด*: แอปที่มีผู้ใช้แสนคนซึ่งแต่ละคนดูสาม topic ก็ยังส่งแต่ละ event ให้แค่ไม่กี่คนที่ขอ และเมื่อต่อมาคุณรันเซิร์ฟเวอร์หลาย instance โมเดลเดียวกันก็ขยายออกไปได้ — broker ที่ใช้ร่วมกัน (Redis, NATS, message bus) กระจายการ publish ข้าม instance ซึ่งก็คือ [pattern การสเกล](/websocket/th/scaling-and-pubsub/) ที่คุณเห็นมาก่อนหน้านี้เป๊ะ ๆ
 
 <Callout title="subscribe ก่อน แล้วรับเฉพาะอันนั้น">
 Pub/sub เปลี่ยนท่อหนึ่งท่อให้เป็น stream ที่ปรับเฉพาะตัวหลายสาย client **subscribe** เข้า topic publisher ส่ง **ไปยัง topic** ไม่ใช่ไปยังตัวบุคคล broker ส่งแต่ละ event เฉพาะให้ subscriber ของ topic นั้นเท่านั้น Room และ channel ก็เป็นเพียง topic ที่มีชื่อเป็นมิตรกว่า — เครื่องจักรเดียวกันอยู่ใต้ฝากระโปรง

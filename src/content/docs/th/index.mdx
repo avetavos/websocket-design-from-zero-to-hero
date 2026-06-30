@@ -6,11 +6,11 @@ hero:
   tagline: คอร์สออกแบบระบบเรียลไทม์ด้วย WebSocket แบบ standalone ตั้งแต่ผู้เริ่มต้นจนถึงขั้นสูง สอนด้วย TypeScript ตั้งแต่ handshake ไปจนถึงการออกแบบ message, heartbeat & reconnection, การออกแบบเซิร์ฟเวอร์, scaling และ security พร้อม WebSocket API จริงที่รันในเบราว์เซอร์
   actions:
     - text: เริ่มที่นี่
-      link: /websocket-design-from-zero-to-hero/th/websocket-foundations/
+      link: /websocket/th/websocket-foundations/
       icon: right-arrow
       variant: primary
     - text: ข้ามไปที่ Client API
-      link: /websocket-design-from-zero-to-hero/th/the-client-api/
+      link: /websocket/th/the-client-api/
       icon: open-book
 ---
 
@@ -20,28 +20,28 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 <CardGrid>
   <Card title="WebSocket Foundations" icon="rocket">
-    WebSocket คืออะไร, upgrade handshake, frame และความต่างจาก HTTP [เริ่ม →](/websocket-design-from-zero-to-hero/th/websocket-foundations/)
+    WebSocket คืออะไร, upgrade handshake, frame และความต่างจาก HTTP [เริ่ม →](/websocket/th/websocket-foundations/)
   </Card>
   <Card title="The Client API" icon="seti:plan">
-    new WebSocket, event & readyState, การส่ง/รับ, binary data [เชื่อมต่อ →](/websocket-design-from-zero-to-hero/th/the-client-api/)
+    new WebSocket, event & readyState, การส่ง/รับ, binary data [เชื่อมต่อ →](/websocket/th/the-client-api/)
   </Card>
   <Card title="Message Design" icon="seti:json">
-    การ framing, JSON กับ binary, request/response ด้วย correlation id, versioning [ออกแบบ →](/websocket-design-from-zero-to-hero/th/message-design/)
+    การ framing, JSON กับ binary, request/response ด้วย correlation id, versioning [ออกแบบ →](/websocket/th/message-design/)
   </Card>
   <Card title="Connection Lifecycle" icon="seti:clock">
-    heartbeat, การตรวจ connection ที่ตาย, reconnection ด้วย backoff, close code [คงการเชื่อมต่อ →](/websocket-design-from-zero-to-hero/th/connection-lifecycle/)
+    heartbeat, การตรวจ connection ที่ตาย, reconnection ด้วย backoff, close code [คงการเชื่อมต่อ →](/websocket/th/connection-lifecycle/)
   </Card>
   <Card title="Server Design" icon="seti:config">
-    ไลบรารี ws, connection state, room & broadcast, backpressure [ให้บริการ →](/websocket-design-from-zero-to-hero/th/server-design/)
+    ไลบรารี ws, connection state, room & broadcast, backpressure [ให้บริการ →](/websocket/th/server-design/)
   </Card>
   <Card title="Scaling & Pub/Sub" icon="random">
-    ทำไม process เดียวไม่พอ, pub/sub backplane, presence, sticky กับ stateless [สเกล →](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/)
+    ทำไม process เดียวไม่พอ, pub/sub backplane, presence, sticky กับ stateless [สเกล →](/websocket/th/scaling-and-pubsub/)
   </Card>
   <Card title="Security" icon="approve-check">
-    Origin & handshake auth, authorization, rate limiting, TLS & DoS [ป้องกัน →](/websocket-design-from-zero-to-hero/th/security/)
+    Origin & handshake auth, authorization, rate limiting, TLS & DoS [ป้องกัน →](/websocket/th/security/)
   </Card>
   <Card title="Patterns & Alternatives" icon="puzzle">
-    pub/sub & room, RPC over WS, WS กับ SSE กับ WebTransport, แอปตัวอย่าง [ประยุกต์ →](/websocket-design-from-zero-to-hero/th/patterns-and-alternatives/)
+    pub/sub & room, RPC over WS, WS กับ SSE กับ WebTransport, แอปตัวอย่าง [ประยุกต์ →](/websocket/th/patterns-and-alternatives/)
   </Card>
 </CardGrid>
 

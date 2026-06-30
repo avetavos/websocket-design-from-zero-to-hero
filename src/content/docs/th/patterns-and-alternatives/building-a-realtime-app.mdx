@@ -29,12 +29,12 @@ export const appDiagram = `flowchart TD
   beat -- "no pong" --> dead["terminate dead socket"]
   route -- "client gone" --> clean["close -> leave all rooms"]`;
 
-แต่ละกล่อง map ไปยังโมดูลที่คุณทำมาแล้ว: auth คือ [security](/websocket-design-from-zero-to-hero/th/security/), state ต่อการเชื่อมต่อและ rooms คือ [server design](/websocket-design-from-zero-to-hero/th/server-design/), heartbeat คือ [connection lifecycle](/websocket-design-from-zero-to-hero/th/connection-lifecycle/) และ message envelope คือ [message design](/websocket-design-from-zero-to-hero/th/message-design/) บทสรุปปิดท้ายก็แค่การต่อสายเข้าด้วยกัน
+แต่ละกล่อง map ไปยังโมดูลที่คุณทำมาแล้ว: auth คือ [security](/websocket/th/security/), state ต่อการเชื่อมต่อและ rooms คือ [server design](/websocket/th/server-design/), heartbeat คือ [connection lifecycle](/websocket/th/connection-lifecycle/) และ message envelope คือ [message design](/websocket/th/message-design/) บทสรุปปิดท้ายก็แค่การต่อสายเข้าด้วยกัน
 
 ## สี่ส่วนผสม
 
-- **Auth ตอน connect.** ปฏิเสธ socket ที่ไม่ได้ authenticate ทันทีด้วย custom close code เพื่อให้ client รู้ว่าไม่ควร retry แบบหลับหูหลับตา ที่นี่เราอ่าน token ง่าย ๆ จาก URL ของ upgrade request ใน production มันจะเป็น session ที่ verify แล้วหรือ JWT (ดู [โมดูล security](/websocket-design-from-zero-to-hero/th/security/))
-- **Rooms.** แต่ละการเชื่อมต่อพก `Set` ของ rooms ที่มันเข้าร่วม message แชตถูกส่งเฉพาะให้ socket อื่นใน room เดียวกัน — [pattern แบบ pub/sub](/websocket-design-from-zero-to-hero/th/patterns-and-alternatives/pubsub-and-rooms/) จากก่อนหน้านี้ในโมดูลนี้ ที่กำหนดขอบเขตอยู่กับกลุ่ม
+- **Auth ตอน connect.** ปฏิเสธ socket ที่ไม่ได้ authenticate ทันทีด้วย custom close code เพื่อให้ client รู้ว่าไม่ควร retry แบบหลับหูหลับตา ที่นี่เราอ่าน token ง่าย ๆ จาก URL ของ upgrade request ใน production มันจะเป็น session ที่ verify แล้วหรือ JWT (ดู [โมดูล security](/websocket/th/security/))
+- **Rooms.** แต่ละการเชื่อมต่อพก `Set` ของ rooms ที่มันเข้าร่วม message แชตถูกส่งเฉพาะให้ socket อื่นใน room เดียวกัน — [pattern แบบ pub/sub](/websocket/th/patterns-and-alternatives/pubsub-and-rooms/) จากก่อนหน้านี้ในโมดูลนี้ ที่กำหนดขอบเขตอยู่กับกลุ่ม
 - **Heartbeat.** TCP อาจเงียบไปได้โดยไม่มี error event — แล็ปท็อปหลับ โทรศัพท์สัญญาณหาย `ping` แบบเป็นช่วงพร้อม `pong` ที่คาดหวังคือวิธีที่เซิร์ฟเวอร์เรียนรู้ว่าการเชื่อมต่อตายไปแล้วจริง ๆ และเรียกคืนมัน แทนที่จะ broadcast เข้าสู่ความว่างเปล่าตลอดไป
 - **ความเป็นมิตรต่อ reconnect.** เซิร์ฟเวอร์ reconnect แทน client ไม่ได้ แต่มันทำให้การ reconnect ราคาถูกได้: `join` ที่สะอาดและ idempotent เพื่อให้ client ที่กลับมาเพียงแค่ประกาศ rooms ของตัวเองใหม่ และ close code ที่เสถียรเพื่อให้ client รู้ว่าควร retry (ชั่วคราว) หรือหยุด (auth ล้มเหลว)
 
@@ -138,7 +138,7 @@ ws.on('close', () => {
 
 ## สิ่งที่คุณได้สร้างขึ้น
 
-ถอยกลับมาแล้วสังเกตว่าไฟล์เล็ก ๆ นี้คืออะไร: บริการ real-time ที่สมบูรณ์และป้องกันตัวได้ มันปฏิเสธ socket นิรนาม route ตาม room แทนที่จะกระหน่ำใส่ทุกคน อยู่รอดจาก client ที่หายวับไปโดยไม่มี `close` และพูด protocol ที่มี type ซึ่ง client ที่ reconnect สามารถต่อยอดได้ ทุกคุณสมบัติเหล่านั้นมาจากโมดูลแยกกันคนละโมดูล — และการประกอบมันเข้าด้วยกันก็คือทักษะที่คอร์สนี้ตั้งใจจะสอนเป๊ะ ๆ จากนี้ การสเกลมันข้าม instance คือ [pub/sub fan-out](/websocket-design-from-zero-to-hero/th/scaling-and-pubsub/) ที่คุณพบมาแล้ว ที่เหลือคือเรื่องของผลิตภัณฑ์
+ถอยกลับมาแล้วสังเกตว่าไฟล์เล็ก ๆ นี้คืออะไร: บริการ real-time ที่สมบูรณ์และป้องกันตัวได้ มันปฏิเสธ socket นิรนาม route ตาม room แทนที่จะกระหน่ำใส่ทุกคน อยู่รอดจาก client ที่หายวับไปโดยไม่มี `close` และพูด protocol ที่มี type ซึ่ง client ที่ reconnect สามารถต่อยอดได้ ทุกคุณสมบัติเหล่านั้นมาจากโมดูลแยกกันคนละโมดูล — และการประกอบมันเข้าด้วยกันก็คือทักษะที่คอร์สนี้ตั้งใจจะสอนเป๊ะ ๆ จากนี้ การสเกลมันข้าม instance คือ [pub/sub fan-out](/websocket/th/scaling-and-pubsub/) ที่คุณพบมาแล้ว ที่เหลือคือเรื่องของผลิตภัณฑ์
 
 <Callout title="บทสรุปปิดท้ายในหนึ่งบรรทัด">
 บริการ real-time ที่มีรูปร่างแบบ production คือ **auth ตอน connect**, **rooms** สำหรับ routing, **heartbeat** เพื่อตรวจจับลิงก์ที่ตายแล้ว และ **protocol ที่มี type และเป็นมิตรต่อ reconnect** — แต่ละอย่างคือโมดูลที่คุณทำมาแล้ว ต่อสายเข้าด้วยกันบนเซิร์ฟเวอร์ `ws` ตัวเดียว
