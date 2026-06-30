@@ -64,7 +64,7 @@ export const lifecycleDiagram = `stateDiagram-v2
 
 ## ดูวงจรชีวิตทำงานจริง
 
-เดโมด้านล่างใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง — `onopen`, `onmessage`, `send`, `close` ชุดเดียวกัน — จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ ในแอปจริงบรรทัดเดียวที่เปลี่ยนคือบรรทัดแรก `new WebSocket('wss://your-server')` กด **Run** แล้วดูการเชื่อมต่อเดียวเคลื่อนผ่านสถานะต่าง ๆ
+เดโมด้านล่างใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง — `onopen`, `onmessage`, `send`, `close` ชุดเดียวกัน — จึงรันได้ทุกที่โดยไม่ต้องมี server ในแอปจริงบรรทัดเดียวที่เปลี่ยนคือบรรทัดแรก `new WebSocket('wss://your-server')` กด **Run** แล้วดูการเชื่อมต่อเดียวเคลื่อนผ่านสถานะต่าง ๆ
 
 export const lifecycleEchoCode = `(function () {
   // In-page echo socket with the same API as a real WebSocket.
@@ -112,7 +112,7 @@ export const quizIndex = [
       'สอง — open และ closed',
       'สาม — connecting, open, closed',
       'สี่ — connecting, open, closing, closed',
-      'ขึ้นอยู่กับเซิร์ฟเวอร์',
+      'ขึ้นอยู่กับ server',
     ],
     answer: 2,
   },

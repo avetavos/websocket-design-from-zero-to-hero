@@ -15,7 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## TCP ดิบ ๆ ไม่มี message — แต่ WebSocket มี
 
-ถ้าคุณเคยเขียนโค้ดกับ TCP socket ดิบ ๆ คุณจะรู้ถึงความเจ็บปวด: TCP คือ **byte stream** คุณอาจเรียก `send('{"a":1}')` หนึ่งครั้งที่ฝั่งหนึ่ง แต่อีกฝั่งอาจได้รับ `'{"a'` แล้วตามด้วย `':1}'` หรือได้ทั้งสองก้อนในครั้งเดียวติดกับ message ถัดไป ไม่มีขอบเขตใด ๆ คุณต้องประดิษฐ์ **framing** ขึ้นมาเอง — length prefixes, delimiters หรืออะไรสักอย่าง — เพื่อรู้ว่า message หนึ่งจบตรงไหนและอันถัดไปเริ่มตรงไหน
+ถ้าคุณเคยเขียนcodeกับ TCP socket ดิบ ๆ คุณจะรู้ถึงความเจ็บปวด: TCP คือ **byte stream** คุณอาจเรียก `send('{"a":1}')` หนึ่งครั้งที่ฝั่งหนึ่ง แต่อีกฝั่งอาจได้รับ `'{"a'` แล้วตามด้วย `':1}'` หรือได้ทั้งสองก้อนในครั้งเดียวติดกับ message ถัดไป ไม่มีขอบเขตใด ๆ คุณต้องประดิษฐ์ **framing** ขึ้นมาเอง — length prefixes, delimiters หรืออะไรสักอย่าง — เพื่อรู้ว่า message หนึ่งจบตรงไหนและอันถัดไปเริ่มตรงไหน
 
 WebSocket แก้ปัญหานั้นให้คุณแล้ว protocol ทำ framing ให้สตรีมที่ระดับ wire ดังนั้น `onmessage` จึงทำงาน **หนึ่งครั้งต่อหนึ่ง message ที่คุณส่ง** โดย payload มาครบทั้งก้อน หนึ่ง `send` ที่ฝั่งหนึ่งกลายเป็น `onmessage` หนึ่งครั้งพอดีที่อีกฝั่ง
 
@@ -94,6 +94,36 @@ export const framingCode = `(function () {
 <NodeRunner client:visible code={framingCode} />
 
 สาม `send` กลายเป็น `onmessage` สามครั้ง — WebSocket รักษาขอบเขตให้สมบูรณ์แบบ และเพราะแต่ละ message ประกาศ `type` ของตน ฝั่งรับจึงจัดการทั้งสามชนิดด้วย `if/else` ที่สะอาดแทนที่จะเดาจาก text เพิ่ม message ชนิดที่สี่ในวันพรุ่งนี้ แล้วมีเพียงแขนงใหม่หนึ่งแขนงเท่านั้นที่เปลี่ยนแปลง
+
+| Message Design | ข้อดี | ข้อเสีย |
+|---|---|---|
+| One JSON object per message + type field | routing ชัดเจน, extensible | verbose กว่า binary |
+| String-based (no structure) | ง่าย debug | fragile, ไม่ scale เมื่อ message types เพิ่ม |
+| Binary framing (Protobuf/MessagePack) | compact, เร็ว | ต้องมี schema, ไม่ human-readable |
+
+## Common Mistakes
+
+**ยัด Message หลายอันใน send() เดียว**
+อาการ:
+- `ws.send('joined:bob\nchat:hello')` — ยัด 2 event ในครั้งเดียว
+- receiver parse ผิด — บางครั้งทำงาน บางครั้งไม่
+- ส่งหนึ่ง JSON object ต่อ `send()` เสมอ — WebSocket เก็บ boundary ให้แล้ว
+
+**Dispatch ตาม String Shape แทน type Field**
+อาการ:
+- `if (data.startsWith('user joined'))` — เปราะบาง แก้ยาก
+- message format เปลี่ยนนิดเดียว → ทุก handler พัง
+- ใส่ `type` field ทุก message แล้ว dispatch ตามนั้น
+
+> 💡 Real World Example
+>
+> **Slack RTM API:**
+> - ทุก message มี `type` field: `"type": "message"`, `"type": "user_typing"`, `"type": "presence_change"`
+> - client dispatch ตาม `type` — ชัดเจน extensible
+>
+> **Discord Gateway:**
+> - ใช้ `op` (opcode) แทน `type` เพื่อแยก application message จาก protocol control
+> - client แตกแขนงตาม opcode ก่อน แล้วจึงดู payload
 
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">
 WebSocket ทำ framing ให้ **bytes** ของคุณแล้ว — หนึ่ง `send` คือหนึ่ง `onmessage` แต่คุณยังต้องทำ framing ให้ **ความหมาย**: ส่งหนึ่ง JSON object ต่อหนึ่ง message พอดี ให้ทุก message มี `type` และ dispatch ตาม type นั้น

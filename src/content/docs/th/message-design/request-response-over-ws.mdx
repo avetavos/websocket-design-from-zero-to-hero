@@ -119,6 +119,36 @@ export const reqReplyCode = `(function () {
 
 ส่วนขัดเกลาสองสามอย่างที่คุณจะเพิ่มใน production: **timeout** ที่ reject entry ที่รออยู่หากไม่มี reply มาถึง และการเคลียร์ map `pending` หาก socket ปิด เพื่อไม่ให้ promise ค้างอยู่ตลอดกาล
 
+| Pattern | ใช้เมื่อ | ข้อเสีย |
+|---|---|---|
+| Correlation ID + pending map | ต้องการ request/response บน WS | ต้อง implement เอง |
+| HTTP สำหรับ request/response | query ครั้งเดียว, cacheable | latency สูงกว่า WS |
+| Fire-and-forget (ไม่มี reply) | log, metric push | ไม่รู้ว่า server ได้รับหรือไม่ |
+
+## Common Mistakes
+
+**ไม่มี Timeout สำหรับ Pending Request**
+อาการ:
+- ส่ง request แล้ว server ไม่ตอบ — promise ค้างตลอดกาล
+- memory leak จาก `pending` map ที่โตขึ้นเรื่อย ๆ
+- ตั้ง timeout ต่อ request: `setTimeout(() => reject('timeout'), 5000)` แล้วลบออกจาก map
+
+**ไม่ Clear Pending Map เมื่อ Connection Close**
+อาการ:
+- WS close → reconnect แต่ promise จาก session เก่ายังค้างอยู่
+- memory leak และ stale handler ทำงานเมื่อ reconnect
+- ใน `onclose`: reject + clear pending map ทั้งหมด
+
+> 💡 Real World Example
+>
+> **Pusher Channels:**
+> - ส่ง subscription request ด้วย `channel_id`
+> - server ตอบ `pusher_internal:subscription_succeeded` พร้อม `channel` ที่ match
+>
+> **Phoenix LiveView (Elixir):**
+> - ใช้ ref field เป็น correlation ID สำหรับทุก push/reply
+> - client track ref เพื่อ match response กับ request ที่ส่งไป
+
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">
 WebSocket ไม่มี request/response ในตัว — reply และ push ใช้สตรีมเดียวร่วมกันและมาถึงผิดลำดับได้ ใส่ **`id`** ที่ไม่ซ้ำบนแต่ละ request ให้ server **สะท้อนมันกลับ** บน reply และเก็บ map *id → ผู้รอ* เพื่อให้ทุกคำตอบหาคำถามที่ถามมันได้
 </Callout>

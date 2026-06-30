@@ -1,0 +1,81 @@
+---
+title: Glossary
+description: คำศัพท์ WebSocket ที่ใช้ตลอด course นี้ — รักษา terminology ภาษาอังกฤษตามที่ developer ใช้จริง
+sidebar:
+  order: 99
+---
+
+## Core WebSocket Terms
+
+| English | Thai Style | ความหมาย |
+|---|---|---|
+| WebSocket | WebSocket | protocol ที่เปิด connection ค้างไว้ให้ client และ server ส่งข้อมูลได้สองทิศทาง |
+| Connection | connection | การเชื่อมต่อระหว่าง client และ server ที่เปิดค้างอยู่ |
+| Handshake | handshake | กระบวนการ upgrade จาก HTTP เป็น WebSocket — เกิดขึ้นครั้งเดียวตอนเริ่มต้น |
+| Frame | frame | หน่วยข้อมูลที่เล็กที่สุดใน WebSocket protocol |
+| Payload | payload | ข้อมูลจริงที่อยู่ใน frame |
+| Heartbeat | heartbeat | กลไกตรวจสอบว่า connection ยังมีชีวิตอยู่ |
+| Ping/Pong | ping/pong | protocol-level heartbeat — server ส่ง Ping, client ตอบ Pong |
+| Session | session | บริบทของ connection หนึ่งตัว รวมถึง state ที่เก็บไว้ |
+
+## Communication Patterns
+
+| English | Thai Style | ความหมาย |
+|---|---|---|
+| HTTP Polling | HTTP Polling | client ส่ง request ซ้ำ ๆ เพื่อถาม server ว่ามีข้อมูลใหม่ไหม |
+| Long Polling | Long Polling | client ส่ง request แล้ว server hold ไว้จนมีข้อมูลใหม่ |
+| Server-Sent Events | Server-Sent Events | server push ข้อมูลฝั่งเดียว ผ่าน HTTP stream |
+| Broadcast | broadcast | ส่ง message ไปหาทุก connection ที่เชื่อมต่ออยู่ |
+| Pub/Sub | Pub/Sub | publisher ส่ง event ไปยัง channel, subscriber รับ event ที่ subscribe ไว้ |
+| Room | room | กลุ่มของ connection ที่รับ message เดียวกัน |
+
+## Reliability
+
+| English | Thai Style | ความหมาย |
+|---|---|---|
+| Reconnect | reconnect | การเชื่อมต่อใหม่เมื่อ connection ขาด |
+| Retry | retry | ลองส่งหรือเชื่อมต่อใหม่เมื่อล้มเหลว |
+| Backoff | backoff | รอนานขึ้นเรื่อย ๆ ก่อน retry — ลด load บน server |
+| Timeout | timeout | เวลาสูงสุดที่รอ response หรือ heartbeat ก่อนถือว่า dead |
+| Message Ordering | message ordering | ลำดับของ message ที่ arrive ที่ receiver — TCP รับประกันใน connection เดียว |
+| Delivery Guarantee | delivery guarantee | at-most-once, at-least-once, exactly-once |
+| Close Code | close code | ตัวเลขที่บอกเหตุผลที่ connection ปิด เช่น 1000 (normal), 1006 (abnormal) |
+
+## Performance
+
+| English | Thai Style | ความหมาย |
+|---|---|---|
+| Latency | latency | เวลาที่ message ใช้เดินทางจาก sender ไปถึง receiver |
+| Throughput | throughput | จำนวน message ที่ส่งได้ต่อวินาที |
+| Backpressure | backpressure | สัญญาณที่ receiver ส่งกลับไปบอก sender ว่ารับไม่ทัน |
+| Keepalive | keepalive | กลไกป้องกัน connection ถูก close โดย load balancer หรือ firewall |
+
+## Scaling
+
+| English | Thai Style | ความหมาย |
+|---|---|---|
+| Load Balancer | load balancer | กระจาย connection ไปหลาย server |
+| Sticky Session | sticky session | บังคับให้ client กลับมาหา server เดิมทุกครั้ง |
+| Pub/Sub Backplane | pub/sub backplane | ระบบกลาง (Redis, Kafka) ที่ sync message ระหว่าง server หลายตัว |
+| Horizontal Scaling | horizontal scaling | เพิ่ม server ใหม่เพื่อรองรับ connection มากขึ้น |
+
+## Communication Model Comparison
+
+| Technology | Direction | Latency | Complexity | เหมาะกับ |
+|---|---|---|---|---|
+| HTTP Polling | Client→Server | สูง | ต่ำ | Simple update ที่ไม่ต้องการ real-time |
+| Long Polling | Mostly Push | ปานกลาง | ปานกลาง | Real-time แต่ไม่อยากเปลี่ยน infrastructure |
+| SSE | Server→Client | ต่ำ | ปานกลาง | Notification, feed แบบ one-way |
+| WebSocket | สองทิศทาง | ต่ำมาก | สูง | Chat, game, collaboration, trading |
+
+## เมื่อ **ไม่** ควรใช้ WebSocket
+
+- ข้อมูลอัปเดตไม่บ่อย — HTTP polling ทุก 30 วินาทีก็เพียงพอ
+- server push เท่านั้น โดยไม่ต้องการ client push — SSE ง่ายกว่า
+- public API ที่ต้องการ CDN cache — WebSocket cache ไม่ได้
+- mobile app ที่ network unstable — battery drain จาก persistent connection สูง
+- ทีมไม่มีประสบการณ์ real-time system — operational complexity สูง
+
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+<ProgressTracker client:visible id="glossary" />

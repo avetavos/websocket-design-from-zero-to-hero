@@ -135,6 +135,37 @@ ws.on('error', leaveRoom);`;
 
 เมื่อมี client สองตัว join เข้า room เดียวกัน `say` จากตัวหนึ่งจะไปถึงอีกตัว แต่ไม่กลับไปหาผู้ส่ง (เราส่ง `ws` เป็น argument `except`) client ตัวที่สามใน room อื่นไม่ได้ยินอะไรเลย การ fan-out แบบเจาะจงนั้น — หนุนด้วย `Map` ของ `Set` และการ cleanup ที่มีวินัย — คือเครื่องยนต์แกนกลางของทุกฟีเจอร์แชท, presence, และ live-collaboration ที่คุณจะสร้าง
 
+| Broadcast Pattern | ส่งถึง | Use Case |
+|---|---|---|
+| Global broadcast | ทุก connection | System announcement, maintenance notice |
+| Room broadcast | connection ใน room เดียวกัน | Chat channel, game room, collaborative document |
+| Direct message | connection เดียว | Private message, personal notification |
+| Selective broadcast | connection ที่ match criteria | Geographic region, subscription tier |
+
+## Common Mistakes
+
+**Broadcast ทุก Message ไปทุก Connection**
+อาการ:
+- server loop ผ่านทุก connection ทุกครั้งที่มี message
+- 10,000 connection × 100 message/s = 1M iteration/s ที่ไม่จำเป็น
+- ใช้ room/channel pattern — ส่งเฉพาะ connection ที่ subscribe
+
+**Room ที่ไม่ Cleanup เมื่อ User ออก**
+อาการ:
+- user disconnect แต่ยังอยู่ใน room set
+- message broadcast ไปยัง connection ที่ dead — error ทุกครั้ง
+- remove จาก room ใน `close` event เสมอ
+
+> 💡 Real World Example
+>
+> **Discord:**
+> - room = channel — message broadcast เฉพาะ member ที่ join channel
+> - voice room — audio mix เฉพาะ user ใน voice channel เดียวกัน
+>
+> **Figma:**
+> - room = document — cursor, selection broadcast เฉพาะ user ที่เปิด document เดียวกัน
+> - user ออกจาก document → remove จาก room อัตโนมัติ
+
 <Callout title="ทุกคน vs room">
 `wss.clients` คือ set ของทุก socket — วน loop มัน (โดยการ์ดด้วย `readyState === OPEN`) เพื่อ broadcast ไปยังทุกคน สำหรับการส่งแบบเจาะจง เก็บ `Map<room, Set<ws>>` ไว้, fan ออกไปเฉพาะสมาชิกของ room นั้น, ข้ามผู้ส่งได้ตามต้องการ, และลบ socket ออกจาก room ของมันตอน close
 </Callout>

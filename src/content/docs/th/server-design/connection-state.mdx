@@ -142,6 +142,37 @@ ws.on('error', cleanup);
 
 ทุกการตอบกลับ echo รายการ subscription ปัจจุบันของ socket — state ที่คงอยู่ข้ามข้อความและเป็นของ connection หนึ่งนั้น เมื่อ client disconnect บรรทัด `cleanup` พิสูจน์ว่าการรื้อถอนได้รันแล้ว รักษาวินัยนั้นไว้แล้ว memory ของ server ของคุณจะถูกจำกัดขอบเขตไม่ว่าจะมี client เข้าออกมากแค่ไหน
 
+| State Type | เก็บที่ไหน | เหมาะกับ |
+|---|---|---|
+| Connection metadata (userId, rooms) | In-memory per connection | Fast access, ไม่ต้อง persist |
+| User session data | Redis/database | Share ข้าม server, persist reconnect |
+| Message history | Database | Audit, replay capability |
+| Presence (online/offline) | Redis + WebSocket event | Real-time, expire อัตโนมัติ |
+
+## Common Mistakes
+
+**เก็บ State มากเกินในทุก Connection**
+อาการ:
+- เก็บ full user profile, permission list, history ใน connection object
+- 10,000 connection = 10,000 copy ของข้อมูลเดียวกัน
+- เก็บแค่ identifier ใน connection, ดึงข้อมูลจาก shared store เมื่อต้องการ
+
+**State ที่ไม่ Cleanup เมื่อ Disconnect**
+อาการ:
+- connection disconnect แต่ state ยังอยู่ใน memory map
+- memory leak — server ช้าลงตามเวลา
+- implement `ws.on('close', () => { connections.delete(userId) })` เสมอ
+
+> 💡 Real World Example
+>
+> **Discord:**
+> - เก็บ userId, guildIds, channel subscriptions ต่อ WebSocket connection
+> - session state ใน Redis — reconnect กลับ session เดิมได้
+>
+> **Slack:**
+> - connection state minimal — user identity และ workspace
+> - ข้อมูลหนักอยู่ใน database, query เมื่อต้องการ
+
 <Callout title="state เข้า, state ออก">
 แก้ identity **หนึ่งครั้ง** ตอน connect แล้วแนบ state (user id, subscriptions) เข้ากับ socket หรือ side-table `Map` mutate มันเมื่อข้อความเข้ามา — และลบ **ทุก** ชิ้นส่วนของมันออกตอน `close` *และ* `error` state ที่ไม่ได้ clean up คือ memory leak และเป็นต้นตอของ ghost broadcast
 </Callout>

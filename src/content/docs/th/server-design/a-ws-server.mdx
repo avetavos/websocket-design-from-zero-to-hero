@@ -113,6 +113,37 @@ ws.on('error', (err) => console.error('socket error:', err.message));`;
 
 ทุกข้อความที่คุณส่งกลับมาพร้อมหมายเลข — เป็นหลักฐานว่าตัวแปร `count` มีชีวิตอยู่ตลอดอายุของ connection หนึ่งนั้น ไม่ใช่ต่อข้อความ scope ต่อ socket นั้นแหละคือสิ่งที่บทเรียนถัดไปจะแปรเปลี่ยนเป็น **state** ต่อ connection ที่มีประโยชน์
 
+| Benefits (WebSocket Server) | Trade-offs |
+|---|---|
+| handle message ด้วย event loop — ไม่ block ต่อ connection | connection แต่ละตัวกิน memory — 10k connection = 10k state objects |
+| event-driven — server ตอบสนองเฉพาะเมื่อมี event | long-lived connection ต้องมี health check mechanism |
+| Node.js/ws ใช้ single thread handle concurrent connection ได้ | CPU-intensive work ต้องออก worker thread |
+| integrate กับ HTTP server เดิมได้ — shared port | open file descriptor limit บน OS ต้องตั้งค่า |
+
+## Common Mistakes
+
+**ทำ CPU-intensive Work ใน Message Handler**
+อาการ:
+- parse, validate, process message ซับซ้อนใน `ws.on('message', ...)` โดยตรง
+- block event loop — connection อื่นรอด้วย
+- ย้าย heavy work ไป worker thread หรือ job queue
+
+**ไม่ Set Max Connection Limit**
+อาการ:
+- server รับ connection ไม่จำกัด — memory หมดเมื่อ connection มาก
+- OOM crash ทำให้ทุก user disconnect พร้อมกัน
+- ตั้ง max connection และ reject ด้วย 503 เมื่อเกิน limit
+
+> 💡 Real World Example
+>
+> **Socket.IO:**
+> - popular WebSocket library สำหรับ Node.js — abstracts server-side handling
+> - ใช้ใน Trello, Notion สำหรับ real-time collaboration
+>
+> **uWebSockets.js:**
+> - high-performance WebSocket server ที่ Binance และ trading platform ใช้
+> - handle 1M+ concurrent connection บน hardware เดียว
+
 <Callout title="ws server ในสามบรรทัด">
 สร้าง server ด้วย `new WebSocketServer({ port })` หรือ `{ server }` เพื่อใช้ HTTP port ร่วมกัน จัดการ client แต่ละรายใน `wss.on('connection', (ws, req) => ...)` ภายในนั้น `ws.on('message', ...)` รับ frame (เป็น Buffer — เรียก `.toString()`) และ `ws.send(...)` push ข้อมูลกลับ
 </Callout>

@@ -51,7 +51,7 @@ export const tradeoffDiagram = `flowchart LR
 - **เปลี่ยนเป็น binary เมื่อตัวเลขเรียกร้อง** — อัตรา message สูง, payload ใหญ่, mobile client บนข้อมูลที่คิดค่าตามปริมาณ หรือ budget latency ที่เข้มงวด วัดก่อน profiler ชนะการคาดเดาเสมอ
 - **คุณผสมกันได้** ส่ง message ควบคุม/ตั้งค่าเป็น JSON เพื่อความชัดเจน และส่งสตรีมร้อนความถี่สูงเป็น binary วินัย field `type` จากบทเรียนที่แล้วใช้ได้กับ encoding ทั้งสองแบบ
 
-## เดโม JSON และรูปร่างของ binary ในโค้ด
+## เดโม JSON และรูปร่างของ binary ในcode
 
 เดโมที่รันได้ด้านล่างส่ง JSON message และรายงานขนาดของมันบน wire — สัมผัสดูว่าโครงสร้างเองกินไปกี่ bytes มันใช้ `WebSocket` API จริงบน echo socket ภายในหน้า
 
@@ -112,6 +112,37 @@ ws.onmessage = (event: MessageEvent) => {
 
 ตรรกะของแอปพลิเคชันเหมือนกับเวอร์ชัน JSON ทุกประการ — มีแค่การเรียก encode/decode และ frame type เท่านั้นที่เปลี่ยน นั่นคือเหตุผลที่คุณเริ่มด้วย JSON ได้และค่อย migrate hot path ไปเป็น binary ทีหลังหากการวัดเรียกร้อง
 
+| Format | ขนาด | Debug | Setup |
+|---|---|---|---|
+| JSON | ใหญ่กว่า (field names ซ้ำ) | อ่านได้ใน DevTools | ไม่ต้องมี tooling |
+| MessagePack | เล็กกว่า JSON ~30-40% | ต้อง decode ก่อนอ่าน | install library |
+| Protobuf | เล็กที่สุด, schema-first | ต้อง .proto + generated code | build step |
+| CBOR | เล็กกว่า JSON, IETF standard | ต้อง decode | library |
+
+## Common Mistakes
+
+**เปลี่ยนเป็น Binary ก่อนวัด Performance**
+อาการ:
+- เปลี่ยน JSON เป็น MessagePack โดยไม่มีหลักฐานว่าช้าจริง
+- เพิ่ม complexity โดยไม่ได้ benefit ที่ชัดเจน
+- ใช้ JSON ก่อน วัด latency/bandwidth ถ้าเป็น bottleneck จริงค่อยเปลี่ยน
+
+**ผสม Binary และ JSON ใน Connection เดียวโดยไม่มี Protocol**
+อาการ:
+- บาง message เป็น JSON บาง message เป็น binary โดยไม่มี type indicator
+- `onmessage` ต้อง guess ว่า frame ไหนเป็น format อะไร
+- กำหนด convention ชัดเจน: control message = JSON, data stream = binary
+
+> 💡 Real World Example
+>
+> **Binance WebSocket Streams:**
+> - ใช้ JSON สำหรับ subscription management
+> - ใช้ binary (custom binary format) สำหรับ high-frequency order book update — ลด payload ได้ 60%
+>
+> **Figma Multiplayer:**
+> - ใช้ binary (custom format) สำหรับ drawing operation — compact สำหรับ position/color/stroke data
+> - JSON สำหรับ metadata และ configuration
+
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">
 **JSON** อ่านได้ ใช้ได้ทุกที่ และเป็นค่าเริ่มต้นที่ถูกต้อง ส่วน format แบบ **binary** (MessagePack, Protobuf, CBOR) แลกความอ่านได้กับ message ที่เล็กลงและ parse ได้เร็วขึ้น — คุ้มค่าสำหรับสตรีมที่ปริมาณสูง เล็ก หรือ latency-critical ตั้งค่าเริ่มต้นเป็น JSON เปลี่ยนเมื่อการวัดเรียกร้อง
 </Callout>
@@ -138,7 +169,7 @@ export const quizJsonBinary = [
     answer: 1,
   },
   {
-    q: 'ในโค้ด MessagePack ทำไมต้องตั้ง ws.binaryType = "arraybuffer"?',
+    q: 'ในcode MessagePack ทำไมต้องตั้ง ws.binaryType = "arraybuffer"?',
     options: [
       'เพื่อบีบอัด JSON อัตโนมัติ',
       'เพื่อให้ binary message มาถึงในรูป ArrayBuffer ที่ decoder อ่านได้ แทนที่จะเป็น Blob',

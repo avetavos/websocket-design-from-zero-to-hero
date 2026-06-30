@@ -22,7 +22,7 @@ flow นี้มีการเคลื่อนไหวเพียงสอ
 1. **publish อย่า send** เมื่อ client ส่งข้อความ instance จะ*ไม่* loop ผ่าน socket ภายในก่อน มันจะ **publish** ข้อความไปยัง channel ที่แชร์กันบน bus
 2. **subscribe และ fan-out** ทุก instance — รวมถึงตัวที่ publish — จะ **subscribe** channel นั้นไว้ เมื่อ bus ส่งข้อความมา แต่ละ instance จะ loop ผ่าน client ภายใน*ของตัวเอง*แล้วส่ง
 
-instance ที่ publish ปฏิบัติต่อตัวเองเหมือน subscriber อื่น ๆ ไม่มี branch พิเศษว่า "และส่งภายในด้วย" การส่งภายในเกิดขึ้นเพราะ publisher เป็น subscriber ด้วยเช่นกัน เส้นทางโค้ดเดียว ไปถึง client ทุกตัว
+instance ที่ publish ปฏิบัติต่อตัวเองเหมือน subscriber อื่น ๆ ไม่มี branch พิเศษว่า "และส่งภายในด้วย" การส่งภายในเกิดขึ้นเพราะ publisher เป็น subscriber ด้วยเช่นกัน เส้นทางcodeเดียว ไปถึง client ทุกตัว
 
 <Mermaid title="publish ไปยัง bus ครั้งเดียว ทุก instance fan-out ไปยัง client ของตัวเอง" code={fanoutDiagram} />
 
@@ -36,7 +36,7 @@ export const fanoutDiagram = `flowchart TB
   B -- "3. fan out locally" --> b1["client 3"]
   B -- "3. fan out locally" --> b2["client 4"]`;
 
-## สิ่งนี้หน้าตาเป็นอย่างไรในโค้ด
+## สิ่งนี้หน้าตาเป็นอย่างไรในcode
 
 handler หดเล็กลงแทนที่จะโตขึ้น การรับข้อความจาก client กลายเป็นการ publish ครั้งเดียว ตรรกะการส่งทั้งหมดย้ายเข้าไปอยู่ใน callback ของ subscription
 
@@ -137,6 +137,35 @@ export const backplaneDemo = `(function () {
 <NodeRunner client:visible code={backplaneDemo} />
 
 log พิสูจน์ประเด็นนี้: ข้อความของ client-1 ถูก publish ครั้งเดียวบน instance A, bus ส่งมันให้ subscriber *ทั้งสอง* ตัว และ client 3 กับ 4 บน instance B ได้รับมันแม้ว่า instance A จะไม่เคยเห็น socket ของพวกเขาเลย เปลี่ยน `Bus` ในหน้านี้เป็น Redis client จริง แล้วรูปแบบนี้เป๊ะ ๆ ก็จะรันข้ามเครื่องได้
+
+| Backplane | Latency | Durability | เหมาะกับ |
+|---|---|---|---|
+| Redis Pub/Sub | ต่ำมาก | ไม่มี — fire-and-forget | Live chat, presence, real-time feed |
+| NATS | ต่ำมาก | optional (JetStream) | Microservice messaging |
+| Kafka | ปานกลาง | สูง — log durable | Event sourcing, replay, audit |
+
+## Common Mistakes
+
+**Publish Loop ผ่าน Socket โดยตรงแทน Bus**
+อาการ:
+- `connections.forEach(conn => conn.socket.send(msg))` ใน `onClientMessage` handler
+- client บน instance อื่นไม่ได้รับ message
+- publish ไปยัง bus เท่านั้น ให้ bus fan-out ผ่าน subscriber
+
+**Subscribe Channel ซ้ำซ้อนหลายครั้ง**
+อาการ:
+- subscribe `room:general` ทุกครั้งที่ client join room
+- client ได้รับ message ซ้ำเมื่อมี 3 subscriber
+- subscribe ครั้งเดียวตอน instance start — ไม่ใช่ตอน client connect
+
+> 💡 Real World Example
+>
+> **Pusher:**
+> - ใช้ Redis pub/sub backplane ระหว่าง instance — message publish ครั้งเดียว ถึง subscriber ทั้งหมด
+>
+> **Ably:**
+> - multi-region backplane — publish ใน region Asia ถึง subscriber ใน region EU
+> - real-time event routing ข้าม data center
 
 <Callout title="แบบจำลองทางความคิด">
 เลิกคิดว่า "ส่งให้ client ทุกตัว" แล้วเริ่มคิดว่า "publish event แล้วแต่ละ instance ส่งให้ตัวของมันเอง" backplane เปลี่ยน broadcast ที่เข้าไม่ถึงหนึ่งครั้งให้กลายเป็น local broadcast หลายครั้ง หนึ่งครั้งต่อ instance — และเพราะ publisher เป็น subscriber ด้วย คุณจึงเขียนตรรกะการส่งเพียงครั้งเดียวเท่านั้น

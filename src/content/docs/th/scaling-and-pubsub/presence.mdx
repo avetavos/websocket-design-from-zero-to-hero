@@ -104,6 +104,36 @@ export const stampedeDiagram = `flowchart TB
   Q -- "immediate (no jitter)" --> H["Synchronized stampede -> store + survivors overload"]
   Q -- "random jittered backoff" --> S["Reconnects spread over time -> smooth recovery"]`;
 
+| Presence Approach | ความแม่นยำ | Scale |
+|---|---|---|
+| Count local connections | ต่ำ — เห็นเฉพาะ instance ตัวเอง | ไม่ scale ข้าม instance |
+| Shared store (Redis) + TTL | สูง — ทุก instance เห็นตรงกัน | scale ข้าม instance |
+| Heartbeat + TTL (no explicit offline) | สูง — crash ก็ clean ขึ้นเอง | ดีที่สุดสำหรับ production |
+
+## Common Mistakes
+
+**Mark Presence แต่ไม่ใช้ TTL**
+อาการ:
+- user crash → presence key ค้างใน Redis ตลอดกาล
+- รายชื่อ "Online" แสดง user ที่จริง offline ไปนานแล้ว
+- ใช้ TTL เสมอ (30-60 วินาที) + heartbeat refresh — ให้ silence ทำ cleanup ให้
+
+**ไม่ Coalesce Presence Write เมื่อ Stampede**
+อาการ:
+- instance restart → client 10,000 ตัว reconnect พร้อมกัน → Redis โดนกระหน่ำ write พร้อมกัน
+- Redis latency พุ่ง, shared store ล่ม
+- debounce หรือ batch presence write ในช่วง reconnect surge
+
+> 💡 Real World Example
+>
+> **Slack:**
+> - presence เก็บใน distributed store + TTL
+> - "Active" status รีเฟรชทุก 30 วินาที — ไม่มี explicit "offline" event
+>
+> **Figma:**
+> - แสดง cursor และ user ที่ active ใน document แบบ real-time
+> - presence key expire หลัง idle — cursor หายเองเมื่อ user ปิด tab โดยไม่แจ้ง
+
 <Callout title="Presence ในสามกฎ">
 เก็บ presence ไว้ใน shared store เพื่อให้ทุก instance เห็นตรงกันว่าใครออนไลน์ ทำให้มันหมดอายุโดยค่าเริ่มต้นและรีเฟรชด้วย heartbeat เพื่อให้การตายอย่างเงียบ ๆ ทำความสะอาดตัวเอง และ publish join/leave ผ่าน backplane จากนั้นเพิ่ม reconnect jitter เข้าไป เพราะในวินาทีที่ instance ตาย ผู้ใช้ทั้งหมดของมันก็มาเคาะประตูพร้อมกัน
 </Callout>

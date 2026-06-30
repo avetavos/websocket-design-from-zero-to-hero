@@ -132,6 +132,37 @@ export const backoffCode = `(function () {
 
 ดูตัวเลข `backing off ...ms` ไต่ขึ้นประมาณ 100, 200, 400, 800 — ถูก cap และสุ่มด้วย jitter ดังนั้นมันจะไม่ใช่กำลังสองพอดี — แล้วในที่สุด connection ก็อยู่ติดและตัวนับ attempt ก็รีเซ็ต ดีเลย์ที่โตขึ้น สุ่ม และถูก cap นั้นคือความแตกต่างระหว่าง client ที่ช่วย server ที่กำลังฟื้นตัว กับ client ที่ฝัง server
 
+| Backoff Strategy | ลักษณะ | เหมาะกับ |
+|---|---|---|
+| Fixed interval | retry ทุก N วินาที | simple, ไม่ทนต่อ thundering herd |
+| Exponential backoff | 1s, 2s, 4s, 8s... | ลด load บน server |
+| Backoff + Jitter | สุ่มใน range | ป้องกัน thundering herd ได้ดีที่สุด |
+| Backoff + Cap | max delay 30s | ไม่รอนานเกินไป |
+
+## Common Mistakes
+
+**ไม่มี Jitter — Thundering Herd**
+อาการ:
+- client 10,000 ตัว drop พร้อมกัน retry ทุก 5 วินาทีพร้อมกัน
+- server โดนกระหน่ำ reconnect เป็นคลื่นซ้ำ ๆ
+- เพิ่ม `Math.random() * ceiling` ทำให้ retry กระจายตัว
+
+**ไม่ Stop เมื่อ Close ตั้งใจ**
+อาการ:
+- user logout → `ws.close(1000)` แต่ reconnect logic ยังทำงาน
+- reconnect วนไม่หยุดทั้งที่ user ไม่ต้องการ
+- check `wasClean` หรือ `code === 1000` → หยุด reconnect
+
+> 💡 Real World Example
+>
+> **Binance WebSocket Streams:**
+> - reconnect ด้วย exponential backoff เมื่อ stream ขาด
+> - cap ที่ 30 วินาที — ไม่รอนานเกินก่อน retry ใหม่
+>
+> **Pusher:**
+> - backoff: 1s, 2s, 4s, 8s, 16s แล้ว cap ที่ 300s
+> - jitter ±20% เพื่อกระจาย reconnect จาก client หลายพัน
+
 <Callout title="Reconnection ในหนึ่งบรรทัด">
 อย่า reconnect ในลูปที่กระชั้น รอนานขึ้นหลังจากแต่ละครั้งที่ล้มเหลว (**exponential backoff**) สุ่มแต่ละเวลารอ (**jitter**) อย่าเกินเพดานที่สมเหตุสมผล (**cap**) รีเซ็ตตัวนับเมื่อสำเร็จ และหยุดเมื่อมีการ close อย่างตั้งใจ
 </Callout>

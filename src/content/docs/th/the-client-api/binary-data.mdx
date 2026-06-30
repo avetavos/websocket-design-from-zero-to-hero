@@ -40,7 +40,7 @@ const blob = new Blob(['raw content']);
 ws.send(blob);
 ```
 
-ทั้งสามแบบถูกส่งเป็น binary frame เดียว `ArrayBuffer` และ `TypedArray` เป็นตัวเลือกปกติเมื่อคุณกำลังประกอบข้อความ binary ในโค้ด ส่วน `Blob` โดดเด่นเมื่อข้อมูลมีอยู่แล้วในรูปไฟล์หรือมาจาก media API
+ทั้งสามแบบถูกส่งเป็น binary frame เดียว `ArrayBuffer` และ `TypedArray` เป็นตัวเลือกปกติเมื่อคุณกำลังประกอบข้อความ binary ในcode ส่วน `Blob` โดดเด่นเมื่อข้อมูลมีอยู่แล้วในรูปไฟล์หรือมาจาก media API
 
 ## การรับ binary: binaryType
 
@@ -92,7 +92,7 @@ export const binaryDiagram = `flowchart TD
 
 ## echo ArrayBuffer แบบสด
 
-เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ มันตั้ง `binaryType` เป็น `'arraybuffer'`, ส่ง `Uint8Array` เล็ก ๆ และอ่านไบต์ที่ echo กลับมาออกมาตรง ๆ ในแอปจริงมีเพียงบรรทัดแรก — `new WebSocket('wss://your-server')` — ที่เปลี่ยนไป
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server มันตั้ง `binaryType` เป็น `'arraybuffer'`, ส่ง `Uint8Array` เล็ก ๆ และอ่านไบต์ที่ echo กลับมาออกมาตรง ๆ ในแอปจริงมีเพียงบรรทัดแรก — `new WebSocket('wss://your-server')` — ที่เปลี่ยนไป
 
 export const binaryEchoCode = `(function () {
   // In-page echo socket with the same API as a real WebSocket.
@@ -140,6 +140,36 @@ export const binaryEchoCode = `(function () {
 
 สี่ไบต์ออกไปเป็น binary frame และกลับมาเป็น `ArrayBuffer` — เพราะเราตั้ง `binaryType = 'arraybuffer'` — ซึ่งจากนั้นเราอ่านผ่าน `Uint8Array` ถ้าเราปล่อย `binaryType` ไว้ที่ค่าเริ่มต้น `'blob'` `event.data` จะกลายเป็น `Blob` ที่ต้องอ่านแบบ asynchronous แทน
 
+| Binary Type | ใช้เมื่อ | Trade-off |
+|---|---|---|
+| ArrayBuffer | ต้องการอ่านไบต์แบบ synchronous | ต้อง copy data ใน memory |
+| TypedArray (Uint8Array) | มี structured binary data | ต้อง align กับ ArrayBuffer |
+| Blob | file/media data ที่อ่านแบบ async | อ่านแบบ async เท่านั้น |
+
+## Common Mistakes
+
+**ลืมตั้ง binaryType ก่อน onopen**
+อาการ:
+- binary message มาถึง แต่ `event.data` เป็น Blob แทน ArrayBuffer
+- code พยายาม `new Uint8Array(event.data)` แต่ fail เพราะ Blob ไม่ใช่ ArrayBuffer
+- ตั้ง `ws.binaryType = 'arraybuffer'` ทันทีหลัง constructor ก่อน `onopen`
+
+**ไม่ Check bufferedAmount — ส่งเร็วเกินไป**
+อาการ:
+- loop ส่ง chunk ขนาดใหญ่ติดกัน — `bufferedAmount` พุ่งสูง
+- memory ฝั่ง client บวม network timeout
+- check `if (ws.bufferedAmount < threshold)` ก่อนส่ง chunk ถัดไปเสมอ
+
+> 💡 Real World Example
+>
+> **Binance/Bybit WebSocket Streams:**
+> - ส่ง market data เป็น binary — compact กว่า JSON 3-5x
+> - `binaryType = 'arraybuffer'` + `DataView` เพื่อ parse order book update latency ต่ำ
+>
+> **Figma Multiplayer:**
+> - ส่ง drawing operation เป็น binary frame
+> - ตรวจ bufferedAmount ก่อนส่ง batch operation เพื่อป้องกัน lag
+
 <Callout title="binary ในลมหายใจเดียว">
 ส่งสตริงเพื่อให้ได้ text frame หรือส่ง `ArrayBuffer` / `TypedArray` / `Blob` เพื่อให้ได้ binary frame ตอนรับ ตั้ง `ws.binaryType` เป็น `'arraybuffer'` (อ่านระดับไบต์แบบ sync) หรือ `'blob'` (ค่าเริ่มต้น) และแยกแขนงใน `onmessage` ตามชนิดของ `event.data` เมื่อสตรีม ให้คุมจังหวะตาม `ws.bufferedAmount` เพื่อไม่ให้ buffer ขาออกพุ่งหนีไปไม่หยุด
 </Callout>
@@ -168,7 +198,7 @@ export const quizBinary = [
   {
     q: 'ws.bufferedAmount บอกอะไรคุณ?',
     options: [
-      'เซิร์ฟเวอร์ตอบรับข้อความไปแล้วกี่ข้อความ',
+      'server ตอบรับข้อความไปแล้วกี่ข้อความ',
       'ยังมีกี่ไบต์ที่อยู่ในคิวและยังไม่ถูกส่ง',
       'จำนวนไบต์ทั้งหมดที่ได้รับมาจนถึงตอนนี้',
       'ขนาด frame สูงสุดที่อนุญาต',

@@ -122,6 +122,67 @@ export const deadDetectCode = `(function () {
 
 คุณจะเห็น ping/pong ที่แข็งแรงสองคู่ จากนั้น mock ก็เงียบไป client ส่งต่อไปเรื่อย ๆ จำนวน pong ที่ไม่ได้รับคำตอบไต่สูงขึ้น และเมื่อมันข้ามเกณฑ์ client ก็ประกาศว่า connection ตายและ *terminate* มัน — โดยไม่เคยรอ `onclose` ที่ไม่มีวันมา นั่นคือการตรวจจับ: คุณหยุดเชื่อความเงียบและลงมือกับคำตอบที่หายไป
 
+| Detection Method | ความแม่นยำ | Overhead |
+|---|---|---|
+| Heartbeat + missed pong counter | สูง — ตรวจจับ half-open ได้ | ส่ง ping ทุก interval |
+| OS TCP keepalive | ต่ำ — อาจใช้เวลาชั่วโมง | ไม่มี application code |
+| Connection timeout บน server | ปานกลาง | server ต้องตรวจ idle time |
+
+## Common Mistakes
+
+**รอ onclose Event สำหรับ Dead Connection**
+อาการ:
+- half-open connection ไม่ยิง `onclose` — รอตลอดไป
+- server ถือ zombie connection โดยไม่รู้ตัว
+- ใช้ heartbeat + missed pong เพื่อตรวจจับ ไม่ต้องรอ event
+
+**Threshold สูงเกินไป — ตรวจจับช้า**
+อาการ:
+- threshold 10 missed pong — รอนานเกินก่อนประกาศว่าตาย
+- UX แย่ — user รู้สึกว่า app ค้าง
+- threshold 2-3 missed pong เหมาะสมสำหรับส่วนใหญ่
+
+> 💡 Real World Example
+>
+> **Discord Gateway:**
+> - ถ้าไม่ได้รับ Heartbeat ACK — ส่ง non-resumable close code แล้ว reconnect ทันที
+> - ไม่รอ TCP timeout
+>
+> **Cloudflare Durable Objects:**
+> - ตรวจสอบ WebSocket activity ทุก 60 วินาที
+> - ถ้าไม่มี activity → close connection เพื่อประหยัด resource
+
+| Dead Connection Scenario | สาเหตุ | Detection Method |
+|---|---|---|
+| Client network drop | wifi ขาด, mobile network เปลี่ยน | Heartbeat timeout |
+| Firewall/NAT timeout | idle connection ถูก reset โดยไม่แจ้ง | Heartbeat ไม่ได้ pong |
+| Process crash | browser tab close, app kill | OS ส่ง TCP RST — `onclose` fire |
+| Server-side timeout | server close idle connection | Close frame opcode |
+
+## Common Mistakes
+
+**เชื่อ TCP Connected ว่า Application Connected**
+อาการ:
+- TCP connection ยังอยู่แต่ data ไม่ผ่าน (half-open connection)
+- server ส่ง message ไปแต่ client ไม่ได้รับ — ไม่มี error
+- heartbeat ที่ application level จำเป็น — TCP status ไม่เพียงพอ
+
+**Zombie Connection ที่ Server ไม่รู้**
+อาการ:
+- client disconnect แบบ ungraceful (network cut, process kill)
+- server ยัง track connection อยู่ใน map — memory leak
+- ตั้ง heartbeat timeout: ถ้าไม่มี pong ใน N วินาที → remove และ close
+
+> 💡 Real World Example
+>
+> **AWS API Gateway WebSocket:**
+> - ตั้ง idle connection timeout — ปิด connection ที่ไม่มี message นาน 10 นาที
+> - แอปต้องส่ง heartbeat ถ้าต้องการ connection ค้างนาน
+>
+> **nginx WebSocket proxy:**
+> - `proxy_read_timeout 3600s` — เพิ่ม timeout สำหรับ long-lived WebSocket connection
+> - ถ้าไม่ตั้ง → nginx ปิด connection ทุก 60 วินาที (default)
+
 <Callout title="การตรวจจับในหนึ่งบรรทัด">
 Connection ตายเมื่อ pong ที่ค้างอยู่ไม่มาถึงก่อน deadline ของมัน นับจำนวนการ miss ข้ามเกณฑ์เล็ก ๆ แล้ว **terminate** แทนการ close อย่างสุภาพ — เพราะ half-open peer หายไปแล้วและไม่เหลือใครให้ handshake ด้วย
 </Callout>

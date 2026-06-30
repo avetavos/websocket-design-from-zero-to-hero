@@ -10,7 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-Handshake เปิดการเชื่อมต่อให้ จากจุดนั้นเป็นต้นไป ทุกไบต์ของทราฟฟิก WebSocket เคลื่อนที่ในแพ็กเก็ตขนาดเล็กที่มีโครงสร้างซึ่งเรียกว่า **frame** คุณจะแทบไม่ได้จัดการ frame ด้วยมือ — `WebSocket` API ของเบราว์เซอร์และไลบรารีฝั่งเซิร์ฟเวอร์ทำให้คุณ — แต่การรู้ว่าเกิดอะไรขึ้นภายใต้การเรียก `ws.send('hello')` ของคุณ ทำให้ส่วนที่เหลือของคอร์สเข้าที่เข้าทาง
+Handshake เปิดการเชื่อมต่อให้ จากจุดนั้นเป็นต้นไป ทุกไบต์ของทราฟฟิก WebSocket เคลื่อนที่ในแพ็กเก็ตขนาดเล็กที่มีโครงสร้างซึ่งเรียกว่า **frame** คุณจะแทบไม่ได้จัดการ frame ด้วยมือ — `WebSocket` API ของเบราว์เซอร์และไลบรารีฝั่ง server ทำให้คุณ — แต่การรู้ว่าเกิดอะไรขึ้นภายใต้การเรียก `ws.send('hello')` ของคุณ ทำให้ส่วนที่เหลือของคอร์สเข้าที่เข้าทาง
 
 ## Frame คืออะไร
 
@@ -46,9 +46,9 @@ export const frameDiagram = `flowchart LR
   h --> wire
   x --> wire`;
 
-## Masking: ไคลเอนต์ไปเซิร์ฟเวอร์
+## Masking: client ไป server
 
-มีกฎหนึ่งข้อที่ทำให้มือใหม่ประหลาดใจ: **ทุก frame ที่ส่งจากไคลเอนต์ไปเซิร์ฟเวอร์ต้องถูก mask** ไคลเอนต์ XOR payload ของมันกับ key สุ่มขนาด 4 ไบต์ที่มันรวมไว้ใน frame เซิร์ฟเวอร์ unmask มันเมื่อมาถึง นี่ไม่ใช่การเข้ารหัส — ใครก็ตามที่อ่านไบต์สามารถย้อนกลับมันได้ — และ `wss://` คือสิ่งที่ปกป้องข้อมูลจริง ๆ Masking มีอยู่ด้วยเหตุผลที่แคบกว่า: เพื่อหยุดยั้งเพจที่มุ่งร้ายไม่ให้สร้าง WebSocket payload ที่ทำให้ HTTP proxy เก่า ๆ ที่ไม่รู้จัก WebSocket ซึ่งนั่งอยู่ระหว่างไคลเอนต์กับเซิร์ฟเวอร์สับสน frame จากเซิร์ฟเวอร์ไปไคลเอนต์ **ไม่ได้** ถูก mask
+มีกฎหนึ่งข้อที่ทำให้มือใหม่ประหลาดใจ: **ทุก frame ที่ส่งจาก client ไป server ต้องถูก mask** client XOR payload ของมันกับ key สุ่มขนาด 4 ไบต์ที่มันรวมไว้ใน frame server unmask มันเมื่อมาถึง นี่ไม่ใช่การเข้ารหัส — ใครก็ตามที่อ่านไบต์สามารถย้อนกลับมันได้ — และ `wss://` คือสิ่งที่ปกป้องข้อมูลจริง ๆ Masking มีอยู่ด้วยเหตุผลที่แคบกว่า: เพื่อหยุดยั้งเพจที่มุ่งร้ายไม่ให้สร้าง WebSocket payload ที่ทำให้ HTTP proxy เก่า ๆ ที่ไม่รู้จัก WebSocket ซึ่งนั่งอยู่ระหว่าง client กับ server สับสน frame จาก server ไป client **ไม่ได้** ถูก mask
 
 ## Fragmentation
 
@@ -65,8 +65,39 @@ URL scheme สองแบบ สะท้อนเว็บเป๊ะ ๆ:
 
 นี่คือส่วนที่ทำให้อุ่นใจ: API จัดการ frame, masking และการประกอบกลับให้คุณ เมื่อคุณเขียน `ws.send('hello, server')` ไลบรารีเข้ารหัส masked text frame เมื่อข้อความมาถึง มันส่งสตริงหรือ blob ที่ประกอบกลับแล้วอย่างสะอาดให้คุณใน `onmessage` คุณออกแบบ *ข้อความ* ส่วนโปรโตคอลเคลื่อนย้าย *frame* การรู้จัก frame layer เพียงแค่หมายความว่าคุณจะเข้าใจสิ่งที่เกิดขึ้นอย่างชัดเจนเมื่อเราปรับ heartbeat จัดการข้อมูล binary และดีบักการปิดในภายหลัง
 
+| Frame Type | ใช้เมื่อ | ข้อควรระวัง |
+|---|---|---|
+| Text (UTF-8) | ส่ง JSON, string message | ขนาด payload ไม่ควรใหญ่เกิน 64KB ต่อ frame |
+| Binary | ส่ง image, audio, Protobuf | ต้อง parse ที่ receiver อย่างระวัง |
+| Ping/Pong | heartbeat ตรวจ connection มีชีวิต | browser ไม่ให้ JS ส่ง Ping เอง — เป็นหน้าที่ server |
+| Close | ปิด connection อย่างนุ่มนวล | ควรรอ close frame ตอบกลับก่อน destroy socket |
+
+## Common Mistakes
+
+**ส่ง Payload ขนาดใหญ่โดยไม่ Fragment**
+อาการ:
+- ส่ง JSON ขนาด 10MB ใน single frame
+- receiver ต้องรอ frame ทั้งหมดก่อน process — blocking
+- ใช้ fragmentation หรือ pagination message แทน
+
+**ใช้ `ws://` ใน Production**
+อาการ:
+- ข้อมูลวิ่งแบบ plaintext ผ่าน network
+- ถูก intercept หรือ inject โดย MITM ได้
+- ใช้ `wss://` เสมอใน production
+
+> 💡 Real World Example
+>
+> **Google Meet:**
+> - ใช้ Binary frame สำหรับ video/audio data (VP8, Opus codec)
+> - ใช้ Text frame สำหรับ control message (mute, chat, participant list)
+>
+> **Figma:**
+> - ส่ง cursor position และ selection state เป็น Binary frame (Protobuf)
+> - ลด payload size เมื่อเทียบกับ JSON text frame ได้ถึง 60%
+
 <Callout title="บทสรุปของ frame layer">
-หลัง handshake ข้อมูลเดินทางในรูปของ **frame** ที่มี opcode สำหรับ text, binary, ping/pong และ close frame จากไคลเอนต์ไปเซิร์ฟเวอร์ถูก **mask** ข้อความสามารถถูก **fragment** ได้ และโปรดักชันใช้ **`wss://`** (TLS) `WebSocket` API ทำสิ่งเหล่านี้ทั้งหมดให้คุณ — คุณทำงานในระดับข้อความ ไม่ใช่ frame
+หลัง handshake ข้อมูลเดินทางในรูปของ **frame** ที่มี opcode สำหรับ text, binary, ping/pong และ close frame จาก client ไป server ถูก **mask** ข้อความสามารถถูก **fragment** ได้ และโปรดักชันใช้ **`wss://`** (TLS) `WebSocket` API ทำสิ่งเหล่านี้ทั้งหมดให้คุณ — คุณทำงานในระดับข้อความ ไม่ใช่ frame
 </Callout>
 
 export const quizFrames = [
@@ -83,8 +114,8 @@ export const quizFrames = [
   {
     q: 'อะไรเป็นจริงเกี่ยวกับ masking?',
     options: [
-      'frame จากเซิร์ฟเวอร์ไปไคลเอนต์ต้องถูก mask',
-      'frame จากไคลเอนต์ไปเซิร์ฟเวอร์ต้องถูก mask และมันไม่ใช่สิ่งทดแทนการเข้ารหัส',
+      'frame จาก server ไป client ต้องถูก mask',
+      'frame จาก client ไป server ต้องถูก mask และมันไม่ใช่สิ่งทดแทนการเข้ารหัส',
       'masking เข้ารหัส payload อย่างปลอดภัย',
       'masking ใช้กับ binary frame เท่านั้น',
     ],

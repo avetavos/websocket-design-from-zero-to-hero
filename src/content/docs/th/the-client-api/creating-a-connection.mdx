@@ -21,7 +21,7 @@ const ws = new WebSocket(url);
 const ws = new WebSocket(url, protocols);
 ```
 
-อาร์กิวเมนต์แรก `url` จำเป็นต้องมี และต้องเป็น URL แบบสมบูรณ์ที่ใช้ WebSocket scheme ส่วนอาร์กิวเมนต์ที่สอง `protocols` เป็นทางเลือก: เป็นสตริงเดียวหรืออาร์เรย์ของสตริงที่ระบุ **subprotocol** ที่ไคลเอนต์ของคุณยินดีจะพูด นั่นคือลายเซ็นทั้งหมด — URL บังคับหนึ่งตัวกับลิสต์ทางเลือกหนึ่งตัว
+อาร์กิวเมนต์แรก `url` จำเป็นต้องมี และต้องเป็น URL แบบสมบูรณ์ที่ใช้ WebSocket scheme ส่วนอาร์กิวเมนต์ที่สอง `protocols` เป็นทางเลือก: เป็นสตริงเดียวหรืออาร์เรย์ของสตริงที่ระบุ **subprotocol** ที่ client ของคุณยินดีจะพูด นั่นคือลายเซ็นทั้งหมด — URL บังคับหนึ่งตัวกับลิสต์ทางเลือกหนึ่งตัว
 
 ## ws กับ wss
 
@@ -39,7 +39,7 @@ const prod = new WebSocket('wss://chat.example.com');  // always this in product
 
 ## Subprotocol
 
-อาร์กิวเมนต์ที่สองซึ่งเป็นทางเลือกช่วยให้ไคลเอนต์และเซิร์ฟเวอร์ตกลงกันว่า *จะพูดโปรโตคอลระดับแอปพลิเคชันตัวไหน* บน socket — คิดเสียว่ามันคือการเลือกภาษากลางก่อนเริ่มบทสนทนา เบราว์เซอร์ส่งลิสต์ของคุณไป เซิร์ฟเวอร์เลือก **หนึ่งตัว** และตัวเลือกนั้นจะส่งกลับมาที่ `ws.protocol` เมื่อการเชื่อมต่อเปิดขึ้น
+อาร์กิวเมนต์ที่สองซึ่งเป็นทางเลือกช่วยให้ client และ server ตกลงกันว่า *จะพูดโปรโตคอลระดับแอปพลิเคชันตัวไหน* บน socket — คิดเสียว่ามันคือการเลือกภาษากลางก่อนเริ่มบทสนทนา เบราว์เซอร์ส่งลิสต์ของคุณไป server เลือก **หนึ่งตัว** และตัวเลือกนั้นจะส่งกลับมาที่ `ws.protocol` เมื่อการเชื่อมต่อเปิดขึ้น
 
 ```ts
 const ws = new WebSocket('wss://example.com', ['chat.v2', 'chat.v1']);
@@ -48,7 +48,7 @@ ws.onopen = () => {
 };
 ```
 
-คุณเรียงลิสต์ตามลำดับความชอบ เซิร์ฟเวอร์ถูกคาดหวังให้เคารพลำดับนั้น ถ้าเซิร์ฟเวอร์ไม่รองรับสักตัว มันควรปฏิเสธการเชื่อมต่อ subprotocol เป็นทางเลือก — หลายแอปไม่เคยใช้เลย — แต่มันคือวิธีที่สะอาดในการกำหนดเวอร์ชันของรูปแบบข้อมูลบนสาย
+คุณเรียงลิสต์ตามลำดับความชอบ server ถูกคาดหวังให้เคารพลำดับนั้น ถ้า server ไม่รองรับสักตัว มันควรปฏิเสธการเชื่อมต่อ subprotocol เป็นทางเลือก — หลายแอปไม่เคยใช้เลย — แต่มันคือวิธีที่สะอาดในการกำหนดเวอร์ชันของรูปแบบข้อมูลบนสาย
 
 ## เกิดอะไรขึ้นในวินาทีที่คุณสร้างมัน
 
@@ -72,7 +72,7 @@ export const constructDiagram = `sequenceDiagram
 
 ## การเชื่อมต่อที่ทำงานจริง
 
-เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ มันเลียนแบบ constructor แบบสองอาร์กิวเมนต์และรายงาน `protocol` ที่เจรจาได้ ในแอปจริงคุณจะเขียน `new WebSocket('wss://your-server', ['chat.v2'])` และไม่มีอะไรอื่นเปลี่ยน
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server มันเลียนแบบ constructor แบบสองอาร์กิวเมนต์และรายงาน `protocol` ที่เจรจาได้ ในแอปจริงคุณจะเขียน `new WebSocket('wss://your-server', ['chat.v2'])` และไม่มีอะไรอื่นเปลี่ยน
 
 export const createEchoCode = `(function () {
   // In-page echo socket with the same API as a real WebSocket.
@@ -109,6 +109,37 @@ export const createEchoCode = `(function () {
 
 ล็อกแรกพิสูจน์ว่าการสร้างคืนค่ามาโดย `readyState` ยังเป็น `0` อยู่ ต่อมาภายใน `onopen` เท่านั้นการเชื่อมต่อจึงใช้งานได้ — และ subprotocol ที่เจรจาได้ก็พร้อมใช้ตรงนั้นในรูปของ `ws.protocol`
 
+| Benefits (Browser WebSocket API) | Trade-offs |
+|---|---|
+| built-in browser API — ไม่ต้อง install library | API เรียบง่าย แต่ไม่มี reconnect built-in |
+| ทำงานบน HTTP/HTTPS port เดิม (80/443) | ไม่มี message queue — ส่งขณะ connecting fail |
+| `ws://` และ `wss://` — TLS ใน URL | ไม่มี timeout built-in — ต้อง implement เอง |
+| event-based — ไม่ block main thread | `send()` ขณะ readyState ไม่ใช่ OPEN throw error |
+
+## Common Mistakes
+
+**ส่ง Message ก่อน Connection OPEN**
+อาการ:
+- `ws.send(data)` ทันทีหลัง `new WebSocket(url)` — ยังไม่ OPEN
+- `InvalidStateError` throw — message หาย
+- ส่งใน `ws.onopen` เสมอ หรือ queue message แล้วส่งเมื่อ open
+
+**ไม่ Handle Connection Error**
+อาการ:
+- ไม่มี `ws.onerror` handler
+- connection fail โดยไม่รู้สาเหตุ — UX แย่
+- implement `onerror` และ `onclose` ที่ log error และ trigger reconnect
+
+> 💡 Real World Example
+>
+> **Discord Web App:**
+> - `new WebSocket('wss://gateway.discord.gg/?v=10')` ตอน app load
+> - หาก connect fail → retry ด้วย exponential backoff
+>
+> **Binance Web Trading:**
+> - connect ไปยัง `wss://stream.binance.com:9443/stream`
+> - reconnect อัตโนมัติเมื่อ connection drop — trader ไม่ miss price update
+
 <Callout title="เช็กลิสต์ของ constructor">
 ใช้ `wss://` ทุกที่ยกเว้นการทดสอบในเครื่อง; ส่ง subprotocol เป็นอาร์เรย์ที่เรียงตามลำดับความชอบและอ่านตัวที่ชนะจาก `ws.protocol`; และจำไว้ว่า constructor คืนค่าทันทีในสถานะ `CONNECTING` — รอ `onopen` ก่อนที่คุณจะส่ง
 </Callout>
@@ -128,7 +159,7 @@ export const quizCreate = [
     q: 'จุดประสงค์ของอาร์กิวเมนต์ตัวที่สองซึ่งเป็นทางเลือกของ constructor คืออะไร?',
     options: [
       'มันตั้งค่า timeout ของการเชื่อมต่อ',
-      'มันระบุ subprotocol เพื่อให้ไคลเอนต์และเซิร์ฟเวอร์ตกลงกันบน application protocol ตัวเดียว',
+      'มันระบุ subprotocol เพื่อให้ client และ server ตกลงกันบน application protocol ตัวเดียว',
       'มันเลือกพอร์ต TCP',
       'มันเปิดโหมด binary',
     ],

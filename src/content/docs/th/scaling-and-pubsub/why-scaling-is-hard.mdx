@@ -74,9 +74,40 @@ export const rebalanceDiagram = `flowchart TB
 
 ตอนนี้เราสามารถระบุปัญหาหลักได้โดยไม่ต้องพูดลอย ๆ
 
-> broadcast บน instance A iterate ผ่าน `A.connections` ส่วน client ที่เชื่อมต่อกับ instance B อยู่ใน `B.connections` ซึ่ง A อ่านไม่ได้ ดังนั้น broadcast จึง**ไม่สามารถ**ไปถึง client นั้นได้ — ไม่ใช่ช้า ไม่ใช่ไม่น่าเชื่อถือ แต่ไม่มีวันเลย เพราะไม่มีเส้นทางโค้ดใดอยู่ระหว่าง heap ทั้งสอง
+> broadcast บน instance A iterate ผ่าน `A.connections` ส่วน client ที่เชื่อมต่อกับ instance B อยู่ใน `B.connections` ซึ่ง A อ่านไม่ได้ ดังนั้น broadcast จึง**ไม่สามารถ**ไปถึง client นั้นได้ — ไม่ใช่ช้า ไม่ใช่ไม่น่าเชื่อถือ แต่ไม่มีวันเลย เพราะไม่มีเส้นทางcodeใดอยู่ระหว่าง heap ทั้งสอง
 
 นี่ไม่ใช่ bug ที่จะแก้ด้วย retry หรือ buffer ที่ใหญ่ขึ้น มันเป็นข้อเท็จจริงเชิงโครงสร้าง: process สองตัวไม่แชร์ memory กัน ทางแก้เดียวคือการเพิ่ม *channel ระหว่าง instance* เพื่อให้ข้อความที่ publish ที่ใดก็ตามถูกส่งไปทุกที่ — ซึ่งก็คือ backplane ในบทเรียนถัดไปนั่นเอง
+
+| Challenge | WebSocket | HTTP REST |
+|---|---|---|
+| State ต่อ connection | สูง — connection state อยู่ใน memory | ต่ำ — stateless request |
+| Cross-instance broadcast | ไม่สามารถทำโดยตรง — ต้องมี backplane | ไม่จำเป็น — CDN cache |
+| Load balance | ยาก — connection อายุยืน | ง่าย — round-robin |
+| Scale limit | จำนวน connection (fd, memory) | RPS (CPU, bandwidth) |
+
+## Common Mistakes
+
+**ใช้ Single Instance สำหรับ Production WebSocket Server**
+อาการ:
+- connection 50,000 ตัว → memory หมด หรือ file descriptor limit ชน
+- deploy ใหม่ → ทุก user หลุดพร้อมกัน
+- scale ออก horizontal, ใช้ backplane สำหรับ cross-instance message
+
+**Broadcast ด้วยการ Loop Socket ใน Instance เดียว**
+อาการ:
+- `connections.forEach(conn => conn.socket.send(msg))` — ไม่ไปถึง instance อื่น
+- user บน instance B ไม่ได้รับ message จาก instance A
+- ใช้ pub/sub backplane (Redis, NATS) ให้ทุก instance subscriber ฟัง channel เดียวกัน
+
+> 💡 Real World Example
+>
+> **Discord:**
+> - แต่ละ Gateway server รองรับ connection นับแสน
+> - ใช้ pub/sub backplane ข้าม region — message ใน server chat ถึง user ทุก instance
+>
+> **Pusher:**
+> - managed WebSocket infrastructure — scale connection 100M+ พร้อมกัน
+> - backplane distributed ข้าม data center ทั่วโลก
 
 <Callout title="สี่ปัญหา หนึ่งราก">
 connection state ใน memory, พื้นทรัพยากรต่อ connection, load ที่ติดอยู่กับ connection อายุยืน และ client ที่เข้าไม่ถึงบน instance อื่น ทั้งหมดสืบย้อนกลับไปยังรากเดียวกัน: แต่ละ connection — และความรู้เกี่ยวกับมัน — อยู่ภายใน process เดียว ทุกเทคนิคการ scaling ในโมดูลนี้คือวิธีหลีกเลี่ยงปัญหานั้น
@@ -107,7 +138,7 @@ export const quizHard = [
     q: 'ทำไม retry หรือ buffer ที่ใหญ่ขึ้นจึงแก้ปัญหา cross-instance broadcast ไม่ได้?',
     options: [
       'retry ช้าเกินไปสำหรับแอป real-time',
-      'process สองตัวไม่แชร์ memory กัน ดังนั้นจึงไม่มีเส้นทางโค้ดใดไปถึง socket ของอีก instance หนึ่ง',
+      'process สองตัวไม่แชร์ memory กัน ดังนั้นจึงไม่มีเส้นทางcodeใดไปถึง socket ของอีก instance หนึ่ง',
       'buffer ล้นก่อนที่ข้อความจะถูกส่ง',
       'load balancer block การส่งซ้ำ ๆ',
     ],

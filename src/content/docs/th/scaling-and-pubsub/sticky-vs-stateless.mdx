@@ -87,6 +87,35 @@ location /ws {
 
 สังเกตว่า backplane จำเป็นในคอลัมน์ **ทั้งสอง** stickiness route client *กลับ* ไปยัง instance ของมัน แต่มันไม่ได้ช่วยให้ instance A ไปถึง client บน instance B เลย stickiness ว่าด้วยการ reconnect และ local state มันไม่เคยเป็นตัวแทนของ cross-instance fan-out สำหรับระบบ real-time สมัยใหม่ส่วนใหญ่ ค่าเริ่มต้นที่แนะนำคือ **stateless instance บวกกับ backplane และ shared store** โดยเก็บ stickiness ไว้สำหรับกรณีที่การสร้าง state ต่อ client ขึ้นใหม่ทุกครั้งที่ reconnect จะแพงจริง ๆ
 
+| Approach | State ต่อ client | Deploy | ต้องการ Backplane |
+|---|---|---|---|
+| Sticky Session | อยู่ใน instance memory | ปั่นป่วน — client ของ instance ที่ restart หลุด | ใช่ — สำหรับ cross-instance |
+| Stateless | อยู่ใน shared store | ราบรื่น — instance ใดก็ได้ serve ได้ | ใช่ — เสมอ |
+
+## Common Mistakes
+
+**ใช้ IP Hash Sticky Session กับ Mobile Client**
+อาการ:
+- mobile เปลี่ยน IP เมื่อสลับ network — ไม่กลับ instance เดิม
+- in-memory state หาย — user ต้อง re-authenticate หรือ state reset
+- ใช้ cookie-based affinity (L7) หรือ stateless architecture แทน
+
+**ไม่ตั้ง proxy_read_timeout สำหรับ WebSocket**
+อาการ:
+- nginx หรือ ALB timeout idle WebSocket connection ทุก 60 วินาที
+- user ที่ idle (ไม่พิมพ์) โดน disconnect โดยไม่รู้ตัว
+- ตั้ง `proxy_read_timeout 3600s` และ implement heartbeat ฝั่ง client
+
+> 💡 Real World Example
+>
+> **Slack:**
+> - ใช้ sticky session สำหรับ RTM API — client ถูก pin ไว้กับ gateway instance
+> - ลด handshake overhead เมื่อ reconnect บ่อย ๆ
+>
+> **Twitch Chat:**
+> - stateless WebSocket server + Redis backplane
+> - autoscale ได้ระหว่าง event ใหญ่ — instance ใดก็ได้รับ subscribe message จาก chat channel
+
 <Callout title="เลือกหนึ่งอย่าง แต่เก็บ backplane ไว้">
 sticky session ปล่อยให้ instance ไว้ใจ in-memory state โดย route client แต่ละตัวกลับไปที่เดิม ส่วน stateless instance ผลัก state ทั้งหมดไปยัง shared store เพื่อให้ instance ใดก็ได้ให้บริการใครก็ได้ ไม่ว่าทางใด load balancer ต้อง forward `Upgrade` header และทน socket ที่ idle — และไม่ว่าทางใดคุณก็ยังต้องการ pub/sub backplane เพราะ stickiness ไม่เคยปล่อยให้ instance หนึ่งไปถึง client ของอีกตัว
 </Callout>

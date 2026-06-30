@@ -144,6 +144,36 @@ export const resumeCode = `(function () {
 
 ดูลำดับ: client รับข้อความ 1 และ 2 แบบสด แล้ว connection ก็ drop (code 1006) ในขณะที่ข้อความ 3 ยังคิวอยู่บน server client reconnect ส่ง `lastSeenId=2` และ server เล่นซ้ำ *เฉพาะ* ข้อความ 3 — ไม่มีช่องว่าง ไม่มีตัวซ้ำของ 1 หรือ 2 การตามเก็บที่ราบรื่นนั้นคือสิ่งที่ทุกแอป real-time ที่สร้างมาดีทำอยู่เบื้องหลัง และมันเป็นไปได้ก็เพราะ reconnection และ last-seen id ทำงานร่วมกันเท่านั้น
 
+| Close Code | ความหมาย | ควร Reconnect? |
+|---|---|---|
+| 1000 | Normal — ปิดตั้งใจ | ไม่ |
+| 1001 | Going Away — server กำลัง shutdown | ใช่ — สักครู่ |
+| 1006 | Abnormal — ไม่มี close frame | ใช่ — ด้วย backoff |
+| 4000-4999 | Application-defined | ขึ้นกับความหมายของ code |
+
+## Common Mistakes
+
+**Reconnect เมื่อได้รับ Code 1000**
+อาการ:
+- reconnect logic ไม่แยก 1000 จาก 1006
+- user logout → app reconnect วนซ้ำ
+- check `code === 1000` → หยุด reconnect, `code === 1006` → reconnect ด้วย backoff
+
+**ไม่ Track Last-Seen ID — ข้อมูลหาย**
+อาการ:
+- reconnect แล้วไม่ request missed message
+- user เห็นช่องว่างในข้อมูล real-time
+- ส่ง `lastSeenId` ตอน reconnect ให้ server replay missed messages
+
+> 💡 Real World Example
+>
+> **Discord:**
+> - code 4xxx เช่น 4000 (Unknown), 4007 (Invalid seq) — app แยกว่าควร resume หรือ reconnect fresh
+>
+> **Slack RTM:**
+> - server ส่ง `goodbye` message ก่อน close — client รู้ว่าเป็น intentional
+> - reconnect พร้อม last event timestamp เพื่อ replay missed messages
+
 <Callout title="Close และ resume ในหนึ่งบรรทัด">
 Close อย่างสะอาดด้วย **code** (1000 = ตั้งใจ, 1006 = มันพัง, 4000+ = ความหมายของคุณเอง) เพื่อให้อีกฝ่ายรู้ว่าควร reconnect หรือไม่ จากนั้น ด้วยการประทับ id ให้ข้อความและจำ **last-seen id** ไว้ client ที่กำลัง reconnect จะเล่นซ้ำสิ่งที่มันพลาดได้พอดี — ปิดลูปของวงจรชีวิตทั้งหมด
 </Callout>

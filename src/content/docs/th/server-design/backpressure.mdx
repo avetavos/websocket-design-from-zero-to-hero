@@ -116,6 +116,37 @@ ws.on('error', () => clearInterval(timer));`;
 
 client ที่สุขภาพดี drain เร็วพอจน `bufferedAmount` อยู่ใกล้ศูนย์และแทบไม่มีอะไรถูก drop ลองหน่วงผู้บริโภคแล้วคุณจะเห็น `dropped` ไต่ขึ้นขณะที่ memory ยังคงราบเรียบ — ซึ่งคือประเด็นทั้งหมด สังเกต `clearInterval` ตอน `close`: ผู้ผลิตที่กำพร้าซึ่งยังรันต่อหลังจาก client จากไปแล้วก็เป็น leak ชนิดหนึ่งในแบบของมันเอง การปกป้อง memory ของ server คือความรับผิดชอบสุดท้ายของ WebSocket server และเป็นตัวตัดสินว่ามันจะรอดวันที่เครือข่ายแย่หรือไม่
 
+| Backpressure Strategy | ทำงานอย่างไร | เหมาะกับ |
+|---|---|---|
+| Drop message | ทิ้ง message เมื่อ buffer เต็ม | Real-time data ที่ stale ไม่มีประโยชน์ |
+| Queue message | เก็บ queue จำกัด, drop oldest | Message ที่ต้องการ ordering |
+| Slow down sender | แจ้ง sender ให้ส่งช้าลง | Controlled stream |
+| Pause + resume | pause input, resume เมื่อพร้อม | Stream processing |
+
+## Common Mistakes
+
+**ไม่ Check `ws.bufferedAmount` ก่อนส่ง**
+อาการ:
+- ส่ง message ต่อเนื่องโดยไม่รอ buffer drain
+- `bufferedAmount` สูงขึ้นเรื่อย ๆ — memory leak
+- check `bufferedAmount < THRESHOLD` ก่อนส่ง หรือใช้ `drain` event
+
+**Drop Message โดยไม่แจ้ง Client**
+อาการ:
+- server drop message เมื่อ queue เต็ม — client ไม่รู้
+- client เห็นข้อมูลหาย โดยไม่รู้ว่าเกิดอะไร
+- ส่ง signal กลับ client เมื่อ drop: `{ type: "overflow", dropped: N }`
+
+> 💡 Real World Example
+>
+> **Binance Market Data:**
+> - ส่ง price update ทุก 100ms — ถ้า client ช้า drop update เก่า
+> - client เห็น current price เสมอ แม้ miss บาง update
+>
+> **Google Docs:**
+> - backpressure สำคัญมากสำหรับ collaborative editing
+> - operation queue ที่ server ป้องกัน conflict เมื่อ client ส่งพร้อมกัน
+
 <Callout title="bound buffer ของทุก client">
 `ws.send` return ทันทีและ queue byte ที่ยังไม่ได้ส่งไว้ใน process ของคุณ — client ที่ช้าทำให้ queue นั้นโตขึ้นโดยไม่มีขีดจำกัด เฝ้าดู `ws.bufferedAmount` และที่ high-water mark ให้ **drop** การอัปเดตที่เก่าค้าง, **coalesce** ให้เหลือตัวล่าสุด, ใช้ **flow control** ผ่าน send callback, หรือ **disconnect** client ที่หมดหวัง เป้าหมายคือ buffer ต่อ client ที่มีขอบเขตเสมอ เพื่อให้ผู้อ่านที่ช้าตัวเดียวไม่มีวันทำให้ memory ของ server หมดได้
 </Callout>

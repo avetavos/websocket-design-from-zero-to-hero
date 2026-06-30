@@ -29,9 +29,9 @@ TCP เองก็ช่วยคุณไม่ได้ตรงนี้ TCP
 มีกลไกที่แตกต่างกันสองอย่าง และผู้คนสับสนระหว่างสองอย่างนี้อยู่เสมอ
 
 - **Protocol ping/pong frame** WebSocket protocol นิยาม control frame พิเศษไว้: *ping* frame และ *pong* frame ตามสเปก เมื่อ endpoint รับ ping มันต้องตอบด้วย pong สิ่งเหล่านี้อยู่ใต้ message handler ของคุณ — มันเป็นส่วนหนึ่งของ framing layer ที่ครอบคลุมในโมดูล foundations
-- **Application-level heartbeat** ข้อความธรรมดาที่โค้ดของคุณส่งและตอบ เช่น JSON `{"type":"ping"}` ที่ server ของคุณตอบกลับด้วย `{"type":"pong"}`
+- **Application-level heartbeat** ข้อความธรรมดาที่codeของคุณส่งและตอบ เช่น JSON `{"type":"ping"}` ที่ server ของคุณตอบกลับด้วย `{"type":"pong"}`
 
-ทำไมถึงต้องสร้างเวอร์ชัน app-level ในเมื่อ protocol ให้ ping/pong มาฟรี ๆ อยู่แล้ว? เพราะ **เบราว์เซอร์ไม่อนุญาตให้คุณใช้ protocol frame เหล่านั้น** `WebSocket` API ของเบราว์เซอร์ไม่มี method `ping()` และไม่ยิง event ใดเมื่อ ping หรือ pong มาถึง — มันถูกจัดการอย่างมองไม่เห็นภายในเบราว์เซอร์ *server* ที่เป็นเบราว์เซอร์สามารถส่ง protocol ping ไปยังเบราว์เซอร์ได้ แต่โค้ด *client* ที่เป็นเบราว์เซอร์ไม่สามารถส่งหรือสังเกตมันได้ ดังนั้นในทางปฏิบัติ:
+ทำไมถึงต้องสร้างเวอร์ชัน app-level ในเมื่อ protocol ให้ ping/pong มาฟรี ๆ อยู่แล้ว? เพราะ **เบราว์เซอร์ไม่อนุญาตให้คุณใช้ protocol frame เหล่านั้น** `WebSocket` API ของเบราว์เซอร์ไม่มี method `ping()` และไม่ยิง event ใดเมื่อ ping หรือ pong มาถึง — มันถูกจัดการอย่างมองไม่เห็นภายในเบราว์เซอร์ *server* ที่เป็นเบราว์เซอร์สามารถส่ง protocol ping ไปยังเบราว์เซอร์ได้ แต่code *client* ที่เป็นเบราว์เซอร์ไม่สามารถส่งหรือสังเกตมันได้ ดังนั้นในทางปฏิบัติ:
 
 - **Server ไปยังเบราว์เซอร์:** server อาจใช้ protocol ping/pong จริงเพื่อตรวจสอบเบราว์เซอร์
 - **เบราว์เซอร์ไปยัง server:** client ต้องใช้ข้อความ app-level เพราะนั่นคือทั้งหมดที่มันมองเห็น
@@ -53,7 +53,7 @@ export const heartbeatDiagram = `sequenceDiagram
     Note over C: pong seen — mark connection healthy
   end`;
 
-ในโค้ด มันคือ interval timer บวกกับ state ชิ้นเล็ก ๆ: ส่ง ping ทุก N วินาที และจำว่า pong ที่ตรงกันกลับมาหรือยัง นี่คือหัวใจของมันในรูปแบบ TypeScript ธรรมดา:
+ในcode มันคือ interval timer บวกกับ state ชิ้นเล็ก ๆ: ส่ง ping ทุก N วินาที และจำว่า pong ที่ตรงกันกลับมาหรือยัง นี่คือหัวใจของมันในรูปแบบ TypeScript ธรรมดา:
 
 ```ts
 const HEARTBEAT_MS = 5000;
@@ -128,8 +128,38 @@ export const pingPongCode = `(function () {
 
 คุณจะเห็น ping ออกไปและ pong กลับมา หนึ่งคู่ต่อวินาที ทุก pong ที่กลับมาคือหลักฐานชัดเจนว่า connection ยังมีชีวิต *ในขณะนั้น* — ไม่ใช่เมื่อสามสิบวินาทีที่แล้ว ไม่ใช่ "น่าจะ" นั่นคือจุดประสงค์ทั้งหมดของ heartbeat: มันเปลี่ยนความเงียบ ซึ่งไม่บอกอะไรคุณเลย ให้กลายเป็นสัญญาณที่สม่ำเสมอซึ่งคุณเชื่อถือได้จริง
 
+| Heartbeat Type | ทำงานอย่างไร | ข้อดี |
+|---|---|---|
+| Protocol-level Ping/Pong | WebSocket frame opcode 0x9/0xA | browser handle อัตโนมัติ, lightweight |
+| Application-level Ping | ส่ง JSON `{ "type": "ping" }` | flexible, บน binary หรือ text frame |
+| Keepalive TCP | OS-level TCP keepalive | ไม่ต้องใช้ application code |
+
+## Common Mistakes
+
+**ไม่มี Heartbeat เลย**
+อาการ:
+- connection ดูเหมือนเปิดอยู่ใน server แต่ client จริงหายไป (zombie connection)
+- load balancer หรือ firewall ปิด idle connection โดยไม่แจ้ง
+- implement server-side ping ทุก 30 วินาที, ถ้าไม่มี pong → ปิด connection
+
+**Heartbeat Interval สั้นเกิน**
+อาการ:
+- ping ทุก 1 วินาท — server และ client เสียเวลา ping/pong แทนที่จะส่งข้อมูล
+- battery drain บน mobile device
+- interval 30-60 วินาทีเหมาะสำหรับส่วนใหญ่ — ขึ้นกับ firewall timeout
+
+> 💡 Real World Example
+>
+> **Discord Gateway:**
+> - ส่ง `{ "op": 1, "d": null }` (Heartbeat opcode) ตาม interval ที่ server กำหนด
+> - server ตอบ `{ "op": 11 }` (Heartbeat ACK) — client รู้ว่า connection alive
+>
+> **Slack RTM API:**
+> - ping/pong ทุก 30 วินาที
+> - ถ้าไม่มี pong ใน 10 วินาที → reconnect อัตโนมัติ
+
 <Callout title="Heartbeat ในหนึ่งบรรทัด">
-Heartbeat คือ traffic ที่จงใจส่งบน timer Protocol ping/pong frame มีอยู่จริงแต่มองไม่เห็นจากโค้ด client ที่เป็นเบราว์เซอร์ ดังนั้นแอปจึงส่งข้อความ ping/pong แบบ **app-level** — เปลี่ยนความเงียบที่กำกวมให้กลายเป็นหลักฐานว่า connection ยังหายใจอยู่
+Heartbeat คือ traffic ที่จงใจส่งบน timer Protocol ping/pong frame มีอยู่จริงแต่มองไม่เห็นจากcode client ที่เป็นเบราว์เซอร์ ดังนั้นแอปจึงส่งข้อความ ping/pong แบบ **app-level** — เปลี่ยนความเงียบที่กำกวมให้กลายเป็นหลักฐานว่า connection ยังหายใจอยู่
 </Callout>
 
 export const quizHeartbeats = [
@@ -147,7 +177,7 @@ export const quizHeartbeats = [
     q: 'ทำไม client ที่เป็นเบราว์เซอร์มักใช้ app-level heartbeat แทน protocol ping/pong frame?',
     options: [
       'Protocol frame ช้ากว่า',
-      'WebSocket API ของเบราว์เซอร์ไม่สามารถส่ง protocol ping หรือสังเกต pong ได้ ดังนั้นโค้ด client จึงใช้ข้อความธรรมดา',
+      'WebSocket API ของเบราว์เซอร์ไม่สามารถส่ง protocol ping หรือสังเกต pong ได้ ดังนั้นcode client จึงใช้ข้อความธรรมดา',
       'App-level heartbeat ถูกบังคับโดย TCP',
       'Protocol frame ทำงานได้บน plain HTTP เท่านั้น',
     ],

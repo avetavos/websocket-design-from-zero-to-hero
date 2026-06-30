@@ -15,9 +15,9 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ใช้ `wss` เสมอ — TLS ต่อรองไม่ได้
 
-WebSocket สืบทอดความปลอดภัยจาก scheme ที่มันเปิดบน `ws://` คือ plaintext: handshake, auth token ของคุณ, และทุก frame เดินทางเป็น cleartext ที่ router, proxy, หรือ peer บน Wi-Fi ร้านกาแฟใด ๆ ระหว่างไคลเอนต์และเซิร์ฟเวอร์อ่านหรือเขียนทับได้ `wss://` ห่อทั้งหมดไว้ใน TLS เหมือนกับที่ `https://` ทำให้ HTTP เป๊ะ ๆ กฎนั้นเรียบง่ายและเด็ดขาด:
+WebSocket สืบทอดความปลอดภัยจาก scheme ที่มันเปิดบน `ws://` คือ plaintext: handshake, auth token ของคุณ, และทุก frame เดินทางเป็น cleartext ที่ router, proxy, หรือ peer บน Wi-Fi ร้านกาแฟใด ๆ ระหว่าง client และ server อ่านหรือเขียนทับได้ `wss://` ห่อทั้งหมดไว้ใน TLS เหมือนกับที่ `https://` ทำให้ HTTP เป๊ะ ๆ กฎนั้นเรียบง่ายและเด็ดขาด:
 
-- ใช้ **`wss://`** ใน production เสมอ Terminate TLS ที่ load balancer ของคุณหรือในเซิร์ฟเวอร์โดยตรง
+- ใช้ **`wss://`** ใน production เสมอ Terminate TLS ที่ load balancer ของคุณหรือใน server โดยตรง
 - หน้าเว็บที่เสิร์ฟผ่าน **`https://` เปิดการเชื่อมต่อ `ws://` ไม่ได้** — เบราว์เซอร์บล็อกมันเป็น mixed content ดังนั้นเมื่อไซต์ของคุณอยู่บน HTTPS (มันอยู่) `wss` ก็เป็นตัวเลือกเดียวที่ใช้งานได้อยู่แล้ว
 - จงมอง `ws://` เป็นความสะดวกในการพัฒนาบน localhost เท่านั้น ไม่มีอะไรมากกว่านั้น
 
@@ -40,8 +40,8 @@ server.listen(443);
 
 Rate limiting จำกัด message *ภายใน* การเชื่อมต่อ แต่ผู้โจมตีก็โจมตีคุณด้วยตัวการเชื่อมต่อ *เอง* ได้เช่นกัน:
 
-- **Connection flood** เปิด socket หลายพันจาก IP เดียวหรือไม่กี่ IP socket ที่เปิดแต่ละอันกิน memory และ file descriptor; ถ้ามากพอก็ทำให้เซิร์ฟเวอร์หมดก่อนที่จะส่ง message สักอัน
-- **Slowloris / slow handshake** เริ่มการอัปเกรด HTTP แต่ส่ง bytes ของคำขอทีละนิดอย่างเชื่องช้า หรือไม่ทำให้จบเลย เซิร์ฟเวอร์ที่ถือการเชื่อมต่อเปิดค้างรออยู่จะกินช่องหนึ่งต่อผู้โจมตีหนึ่งคนฟรี ๆ การป้องกันคือ **handshake timeout**: ถ้าการอัปเกรดไม่เสร็จภายในไม่กี่วินาที ก็ทิ้งมัน
+- **Connection flood** เปิด socket หลายพันจาก IP เดียวหรือไม่กี่ IP socket ที่เปิดแต่ละอันกิน memory และ file descriptor; ถ้ามากพอก็ทำให้ server หมดก่อนที่จะส่ง message สักอัน
+- **Slowloris / slow handshake** เริ่มการอัปเกรด HTTP แต่ส่ง bytes ของคำขอทีละนิดอย่างเชื่องช้า หรือไม่ทำให้จบเลย server ที่ถือการเชื่อมต่อเปิดค้างรออยู่จะกินช่องหนึ่งต่อผู้โจมตีหนึ่งคนฟรี ๆ การป้องกันคือ **handshake timeout**: ถ้าการอัปเกรดไม่เสร็จภายในไม่กี่วินาที ก็ทิ้งมัน
 - **Idle hoarding** เปิด socket, authenticate, แล้วเงียบไปตลอดกาล — ผูกทรัพยากรไว้ในขณะที่ไม่ทำอะไรเลย **heartbeat บวก idle timeout** ทวงคืนพวกนี้ได้: ping เป็นระยะ และปิดการเชื่อมต่อใด ๆ ที่ pong ไม่กลับหรือไม่ส่งอะไรมานานเกินไป
 
 <Mermaid title="การจำกัดการเชื่อมต่อ: limit, time out handshake, authenticate ก่อนจัดสรร" code={dosDiagram} />
@@ -61,7 +61,7 @@ export const dosDiagram = `flowchart TB
 
 ## Per-IP limit และ idle timeout ในทางปฏิบัติ
 
-ภาพร่างด้านล่างแสดงรูปร่างของ connection-handler: counter ราย IP ที่ปฏิเสธการเชื่อมต่อส่วนเกิน, การ cleanup counter นั้นทันทีตอน close, และ idle timeout ที่ขับด้วย heartbeat ซึ่งปิด socket ที่ตายแล้ว นี่เป็น `ts` มากกว่าจะเป็นเดโมที่รันได้เพราะมันขึ้นอยู่กับเครือข่ายจริงและนาฬิกาจริง — แต่มันหย่อนลงในเซิร์ฟเวอร์ `ws` ได้ตรง ๆ
+ภาพร่างด้านล่างแสดงรูปร่างของ connection-handler: counter ราย IP ที่ปฏิเสธการเชื่อมต่อส่วนเกิน, การ cleanup counter นั้นทันทีตอน close, และ idle timeout ที่ขับด้วย heartbeat ซึ่งปิด socket ที่ตายแล้ว นี่เป็น `ts` มากกว่าจะเป็นเดโมที่รันได้เพราะมันขึ้นอยู่กับเครือข่ายจริงและนาฬิกาจริง — แต่มันหย่อนลงใน server `ws` ได้ตรง ๆ
 
 ```ts
 const MAX_PER_IP = 20;
@@ -98,6 +98,37 @@ wss.on('connection', (ws, req) => {
 ```
 
 handshake timeout เองอยู่สูงขึ้นไปหนึ่งระดับ บน HTTP server (`server.headersTimeout` / `server.requestTimeout`) ดังนั้น slowloris upgrade จะถูกทิ้งก่อนที่มันจะไปถึง handler นี้ด้วยซ้ำ เมื่อรวมกันสิ่งเหล่านี้จำกัด *จำนวนเท่าไร* ของการเชื่อมต่อที่มีอยู่, *นานแค่ไหน* ที่อันที่ยังไม่เสร็จจะค้างอยู่ได้, และ *นานแค่ไหน* ที่อัน idle จะรอดอยู่ได้ — ปิดช่องว่างสุดท้ายที่ผู้โจมตีจะใช้ประโยชน์ได้
+
+| Security Layer | ป้องกันอะไร | วิธีทำ |
+|---|---|---|
+| TLS (wss://) | Man-in-the-middle, eavesdropping | ใช้ `wss://` เสมอใน production |
+| Connection limit | DDoS จาก connection flood | max connection per IP, global limit |
+| Message rate limit | Message flood | token bucket per connection |
+| Payload validation | Malformed data attack | validate schema ทุก message |
+
+## Common Mistakes
+
+**ใช้ `ws://` ใน Production**
+อาการ:
+- message ส่งผ่าน network โดยไม่ encrypt
+- attacker ใน network เดียวกัน (café wifi) ดัก message ได้
+- ใช้ `wss://` (WebSocket Secure) เสมอใน production
+
+**ไม่มี DDoS Protection บน WebSocket Endpoint**
+อาการ:
+- attacker เปิด WebSocket connection จำนวนมากจาก IP หลายตัว
+- server file descriptor หมด — legitimate user เชื่อมต่อไม่ได้
+- ใช้ Cloudflare, AWS Shield, หรือ nginx rate limit บน `/ws` endpoint
+
+> 💡 Real World Example
+>
+> **Cloudflare WebSocket:**
+> - TLS terminate ที่ edge — wss:// ถึง Cloudflare, แล้วส่งต่อผ่าน internal network
+> - DDoS protection built-in — absorb connection flood ก่อนถึง origin server
+>
+> **Discord:**
+> - wss:// เสมอ — message ทุกชิ้น encrypt บน wire
+> - rate limit และ connection limit ป้องกัน abuse จาก bot farm
 
 <Callout title="เข้ารหัสทุกอย่าง; ปฏิเสธให้ราคาถูก จัดสรรให้สาย">
 รันบน **`wss`/TLS** เท่านั้น จำกัดการเชื่อมต่อ ไม่ใช่แค่ message: **จำกัดการเชื่อมต่อต่อ IP**, **time out handshake ที่ช้า/ไม่เสร็จ** (slowloris), และใช้ **heartbeat พร้อม idle timeout** เพื่อทวงคืน socket ที่ตายแล้ว เหนือสิ่งอื่นใด **authenticate ก่อนที่คุณจะจัดสรร** — ทุกทรัพยากรราย connection ควรถูกใช้หลังจาก origin และ credential ผ่านแล้วเท่านั้น เพื่อที่ผู้โจมตีที่ถูกปฏิเสธจะทำให้คุณเสียอะไรแทบไม่เลย

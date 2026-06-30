@@ -36,7 +36,7 @@ ws.onmessage = (event) => {
 };
 ```
 
-`event.data` คือ *ที่เดียว* ที่ payload อยู่ ถ้าคุณส่ง JSON มา คุณก็ parse มันตรงนี้ ถ้าคุณส่งข้อความธรรมดามา คุณก็ใช้มันได้เลย handler ทำงานหนึ่งครั้งต่อหนึ่งข้อความ และยิงได้บ่อยเท่าที่เซิร์ฟเวอร์มีเรื่องจะพูด
+`event.data` คือ *ที่เดียว* ที่ payload อยู่ ถ้าคุณส่ง JSON มา คุณก็ parse มันตรงนี้ ถ้าคุณส่งข้อความธรรมดามา คุณก็ใช้มันได้เลย handler ทำงานหนึ่งครั้งต่อหนึ่งข้อความ และยิงได้บ่อยเท่าที่ server มีเรื่องจะพูด
 
 ## คุณส่งได้เฉพาะตอน OPEN เท่านั้น
 
@@ -59,7 +59,7 @@ function safeSend(ws: WebSocket, data: string) {
 
 ## ลำดับถูกรับประกัน
 
-WebSocket ทำงานบนการเชื่อมต่อ TCP เดียว และนั่นมอบการรับประกันที่หนักแน่นและเรียบง่ายให้คุณ: **ข้อความถูกส่งถึงตามลำดับที่คุณส่งออกไป** ถ้าคุณเรียก `send('a')` แล้ว `send('b')` แล้ว `send('c')` peer จะได้รับ `a`, `b`, `c` — ไม่มีวันสลับลำดับ ไม่มีวันซ้ำ เช่นเดียวกันกับข้อความที่เซิร์ฟเวอร์ส่งมาหาคุณ
+WebSocket ทำงานบนการเชื่อมต่อ TCP เดียว และนั่นมอบการรับประกันที่หนักแน่นและเรียบง่ายให้คุณ: **ข้อความถูกส่งถึงตามลำดับที่คุณส่งออกไป** ถ้าคุณเรียก `send('a')` แล้ว `send('b')` แล้ว `send('c')` peer จะได้รับ `a`, `b`, `c` — ไม่มีวันสลับลำดับ ไม่มีวันซ้ำ เช่นเดียวกันกับข้อความที่ server ส่งมาหาคุณ
 
 <Mermaid title="การส่งและ message event ที่มันกระตุ้น ตามลำดับ" code={ioDiagram} />
 
@@ -81,7 +81,7 @@ export const ioDiagram = `sequenceDiagram
 
 ## ส่งและรับ แบบสด
 
-เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมีเซิร์ฟเวอร์ มันส่งสามข้อความติดกันจากภายใน `onopen` และพิมพ์ echo แต่ละตัวเมื่อมันกลับมา — ตามลำดับ ในแอปจริงมีเพียงบรรทัดแรกที่เปลี่ยนเป็น `new WebSocket('wss://your-server')`
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server มันส่งสามข้อความติดกันจากภายใน `onopen` และพิมพ์ echo แต่ละตัวเมื่อมันกลับมา — ตามลำดับ ในแอปจริงมีเพียงบรรทัดแรกที่เปลี่ยนเป็น `new WebSocket('wss://your-server')`
 
 export const sendRecvCode = `(function () {
   // In-page echo socket with the same API as a real WebSocket.
@@ -122,6 +122,36 @@ export const sendRecvCode = `(function () {
 <NodeRunner client:visible code={sendRecvCode} />
 
 สังเกตว่าความพยายามแรก — `too early` — ถูกบล็อกเพราะ socket ยังเป็น `CONNECTING` อยู่ จากนั้นเมื่อเปิดแล้ว สามข้อความที่มีหมายเลขก็กลับมาเป็น `1`, `2`, `3` ตามลำดับที่มันถูกส่งออกไปพอดี นั่นคือ `send()`, message event, กฎ OPEN-only และลำดับ ทั้งหมดในการรันครั้งเดียว
+
+| Data Type | ส่งด้วย | รับเป็น | เหมาะกับ |
+|---|---|---|---|
+| String | `ws.send("text")` | `event.data` เป็น string | JSON message, text protocol |
+| ArrayBuffer | `ws.send(buffer)` | `event.data` เป็น ArrayBuffer | binary data, fixed structure |
+| Blob | `ws.send(blob)` | `event.data` เป็น Blob | file, image, audio |
+
+## Common Mistakes
+
+**Parse JSON ทุก Message โดยไม่มี Error Handling**
+อาการ:
+- `JSON.parse(event.data)` โดยไม่ try/catch
+- server ส่ง malformed JSON → app crash
+- wrap ใน try/catch: `try { const msg = JSON.parse(event.data); } catch (e) { console.error('Invalid message', e) }`
+
+**ส่ง Message ขนาดใหญ่ใน Loop โดยไม่ Check bufferedAmount**
+อาการ:
+- loop ส่ง frame ติดกัน 1000 ครั้ง — buffer ล้น
+- `ws.bufferedAmount` สูงมาก — memory spike
+- check `ws.bufferedAmount < threshold` ก่อนส่ง message ถัดไป
+
+> 💡 Real World Example
+>
+> **Slack:**
+> - รับ message เป็น JSON: `{ "type": "message", "text": "Hello", "channel": "C1234" }`
+> - dispatch ตาม `type` field — event-driven message handling
+>
+> **Google Docs:**
+> - ส่ง operation เป็น binary (OT operations) — compact และเร็ว
+> - รับ update จาก server และ apply ต่อ document state local
 
 <Callout title="สองทิศทาง สามกฎ">
 ส่งด้วย `ws.send(data)`; รับบน `event.data` ภายใน `onmessage` คุณส่งได้เฉพาะตอน `OPEN` (ส่งก่อนหน้านั้นจะ throw, หลังจากนั้นจะถูกทิ้ง), การส่งรักษาลำดับเอาไว้บนการเชื่อมต่อ TCP เดียว แต่ API ไม่เคยจับคู่การตอบกลับกับ request — เพิ่ม correlation id ของคุณเองถ้าคุณต้องการแบบนั้น

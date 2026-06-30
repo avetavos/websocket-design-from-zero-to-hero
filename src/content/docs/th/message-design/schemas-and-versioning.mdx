@@ -21,7 +21,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 - **`v`** — version ของ protocol/schema ที่ message นี้ยึดตาม
 - **`payload`** — ข้อมูลจริง ส่วนที่แปรผันตาม `type`
 
-ทุก message ในทั้งสองทิศทาง หน้าตาเหมือนกันจากภายนอก โค้ด routing อ่าน `type` โค้ดความเข้ากันได้อ่าน `v` และมีเพียง handler เฉพาะแต่ละ type เท่านั้นที่แตะ `payload` message ที่ถูกต้องตามรูปแบบอ่านได้แบบ `{"type":"chat","v":1,"payload":{...}}`
+ทุก message ในทั้งสองทิศทาง หน้าตาเหมือนกันจากภายนอก code routing อ่าน `type` codeความเข้ากันได้อ่าน `v` และมีเพียง handler เฉพาะแต่ละ type เท่านั้นที่แตะ `payload` message ที่ถูกต้องตามรูปแบบอ่านได้แบบ `{"type":"chat","v":1,"payload":{...}}`
 
 <Mermaid title="envelope ที่สม่ำเสมอห่อหุ้ม payload ที่แปรผัน" code={envelopeDiagram} />
 
@@ -113,6 +113,36 @@ export const schemaCode = `(function () {
 <NodeRunner client:visible code={schemaCode} />
 
 message v1 และ message v2 ไหลผ่าน `handleChat` *เดียวกัน* ทั้งคู่ field `lang` ใหม่ปรากฏเฉพาะตรงที่มันถูกส่งมา และใส่ค่าเริ่มต้นเป็น `en` ตรงที่ไม่มี — นั่นคือการพัฒนาแบบ additive ที่กำลังทำงาน message ที่สามไม่เคยไปถึง handler เพราะ validation หยุดมันไว้ตั้งแต่หน้าประตู สร้างนิสัยสองอย่างนี้ตั้งแต่วันแรก แล้ว protocol ของคุณจะเติบโตได้เป็นปี ๆ โดยไม่ต้องมีวัน flag day
+
+| Evolution Strategy | ความปลอดภัย | Complexity |
+|---|---|---|
+| เพิ่ม optional field (additive) | สูง — client เก่าเพิกเฉยได้ | ต่ำ |
+| Bump version field | ปานกลาง — server ต้อง support หลาย version | ปานกลาง |
+| Breaking change ไม่มี migration | ต่ำ — client เก่าพัง | - |
+
+## Common Mistakes
+
+**ไม่ Validate Message ก่อน Handle**
+อาการ:
+- `msg.payload.text` โดยไม่ check ว่า `payload` มีอยู่ — crash เมื่อ client ส่ง malformed message
+- ทำให้ connection crash ด้วย unhandled error
+- validate envelope ก่อนเสมอ: ต้องมี `type`, `v`, `payload`
+
+**เปลี่ยนความหมาย Field ที่มีอยู่แล้ว**
+อาการ:
+- `"status": "ok"` เปลี่ยนเป็น `"status": 200` (string → number) — client เก่า parse ผิด
+- behavior เปลี่ยนโดย client เก่าไม่รู้ตัว
+- เพิ่ม field ใหม่เสมอ อย่าเปลี่ยน field เดิม — bump `v` เมื่อ breaking change หลีกเลี่ยงไม่ได้
+
+> 💡 Real World Example
+>
+> **Discord Gateway:**
+> - ทุก event มี `op` (opcode), `d` (data), `s` (sequence), `t` (event name)
+> - envelope สม่ำเสมอ — client dispatch ตาม `op` ก่อนแล้วดู `t`
+>
+> **Twitch EventSub:**
+> - ทุก message มี `metadata.message_type` และ `metadata.message_id`
+> - version field ใน subscription type — รองรับหลาย version พร้อมกัน
 
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">
 ห่อทุก message ด้วย **envelope** ที่สม่ำเสมอ (`type` + `v` + `payload`) **validate** สิ่งที่เข้ามาก่อนที่ handler ใด ๆ จะเชื่อมัน และ **พัฒนาแบบ additive** — เพิ่ม field ที่เป็น optional และ bump `v` สำหรับการเปลี่ยนแปลงที่ breaking — เพื่อให้ client เก่าและใหม่คุยกับ server เดียวกันได้ต่อไป
