@@ -60,32 +60,32 @@ export const surfaceDiagram = `flowchart TB
 
 export const quizIndex = [
   {
-    q: 'Why is a WebSocket upgrade not protected the way a cross-origin fetch is?',
+    q: 'ทำไม WebSocket upgrade ถึงไม่ได้รับการปกป้องแบบเดียวกับ cross-origin fetch?',
     options: [
-      'WebSockets always run over TLS, so CORS is unnecessary',
-      'The same-origin policy and CORS preflight do not apply to WebSocket upgrades — the server must check the Origin header itself',
-      'Browsers refuse all cross-origin WebSocket connections automatically',
-      'WebSockets cannot send cookies, so there is nothing to protect',
+      'WebSocket วิ่งบน TLS เสมอ เลยไม่จำเป็นต้องมี CORS',
+      'same-origin policy และ CORS preflight ไม่มีผลกับ WebSocket upgrade — server ต้องเช็ค Origin header เอง',
+      'เบราว์เซอร์ปฏิเสธการเชื่อมต่อ WebSocket แบบ cross-origin ทั้งหมดโดยอัตโนมัติ',
+      'WebSocket ส่ง cookie ไม่ได้ เลยไม่มีอะไรต้องปกป้อง',
     ],
     answer: 1,
   },
   {
-    q: 'Authenticating a WebSocket connection at the handshake tells you what?',
+    q: 'การ authenticate การเชื่อมต่อ WebSocket ตอน handshake บอกอะไรคุณ?',
     options: [
-      'That every message the connection sends is automatically allowed',
-      'Who is on the connection — but not whether any given message is permitted',
-      'That the connection can never be abused',
-      'That TLS is in use',
+      'ว่าทุก message ที่การเชื่อมต่อส่งมาถูกอนุญาตโดยอัตโนมัติ',
+      'ว่าใครอยู่บนการเชื่อมต่อ — แต่ไม่ได้บอกว่า message ใดถูกอนุญาต',
+      'ว่าการเชื่อมต่อนี้จะไม่มีวันถูก abuse',
+      'ว่ากำลังใช้ TLS อยู่',
     ],
     answer: 1,
   },
   {
-    q: 'What is the rule about scheme in production?',
+    q: 'กฎเรื่อง scheme บน production คืออะไร?',
     options: [
-      'Use ws:// because it is faster',
-      'Use wss:// (TLS) — ws:// sends frames in cleartext and is blocked from https pages as mixed content',
-      'Either scheme is fine as long as you check the Origin',
-      'Use ws:// and rely on the firewall',
+      'ใช้ ws:// เพราะเร็วกว่า',
+      'ใช้ wss:// (TLS) — ws:// ส่ง frame เป็น cleartext และถูกบล็อกจากหน้า https ในฐานะ mixed content',
+      'scheme ไหนก็ได้ตราบใดที่คุณเช็ค Origin',
+      'ใช้ ws:// แล้วพึ่ง firewall เอา',
     ],
     answer: 1,
   },

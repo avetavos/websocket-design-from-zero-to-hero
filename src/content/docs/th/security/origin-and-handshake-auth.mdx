@@ -149,27 +149,27 @@ handshake คือช่วงเดียวที่คุณมี HTTP head
 
 export const quizOrigin = [
   {
-    q: 'Why is the Origin header check on the server mandatory for cookie-authenticated WebSockets?',
+    q: 'ทำไมการเช็ค Origin header ที่ server ถึงจำเป็นสำหรับ WebSocket ที่ authenticate ด้วย cookie?',
     options: [
-      'Because the Origin header improves performance',
-      'Because the browser does no CORS preflight for WebSocket upgrades, so without it any site can open an authenticated socket using the user’s cookies',
-      'Because cookies are not sent on WebSocket upgrades',
-      'Because TLS requires it',
+      'เพราะ Origin header ช่วยเพิ่ม performance',
+      'เพราะเบราว์เซอร์ไม่ทำ CORS preflight ให้ WebSocket upgrade ถ้าไม่มีการเช็ค เว็บไซต์ไหนก็เปิด socket ที่ authenticate ด้วย cookie ของ user ได้',
+      'เพราะ cookie ไม่ถูกส่งไปตอน WebSocket upgrade',
+      'เพราะ TLS บังคับให้ทำ',
     ],
     answer: 1,
   },
   {
-    q: 'Where should an authentication token NOT be placed?',
+    q: 'ไม่ควรวาง authentication token ไว้ที่ไหน?',
     options: [
-      'In a session cookie',
-      'In the Sec-WebSocket-Protocol subprotocol header',
-      'In the connection URL’s query string',
-      'In the first message after the socket opens',
+      'ใน session cookie',
+      'ใน subprotocol header ของ Sec-WebSocket-Protocol',
+      'ใน query string ของ URL ที่เชื่อมต่อ',
+      'ใน message แรกหลัง socket เปิด',
     ],
     answer: 2,
   },
   {
-    q: 'Which close code does the demo use to refuse a connection with a bad origin or token?',
+    q: 'demo ใช้ close code ไหนปฏิเสธการเชื่อมต่อที่มี origin หรือ token ผิด?',
     options: [
       '1000 (normal closure)',
       '1006 (abnormal closure)',

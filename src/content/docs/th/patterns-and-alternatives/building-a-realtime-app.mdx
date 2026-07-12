@@ -166,7 +166,7 @@ ws.on('close', () => {
 >
 > **Figma:**
 > - multiplayer collaborative editor บน WebSocket
-> - CRDT สำหรับ conflict resolution — สองคนแก้ไขพร้อมกันได้โดยไม่ conflict
+> - central server แบบ authoritative resolve การแก้พร้อมกันด้วย last-writer-wins (ไม่ได้ใช้ CRDT หรือ OT) — client ส่ง change ไป server เป็นคนตัดสินค่าสุดท้าย
 >
 > **Linear:**
 > - real-time issue tracking ผ่าน WebSocket

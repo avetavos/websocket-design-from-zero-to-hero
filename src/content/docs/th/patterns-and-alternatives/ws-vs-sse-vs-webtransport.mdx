@@ -75,7 +75,7 @@ export const decisionDiagram = `flowchart TD
 >
 > **GitHub:** ใช้ SSE สำหรับ live event stream — one-way push ที่ไม่ต้องการ bidirectional
 >
-> **Google Meet:** ใช้ WebTransport สำหรับ audio/video — UDP-like delivery ลด latency
+> **Google Meet:** ใช้ WebRTC (SRTP/DTLS) สำหรับ audio/video — UDP-based delivery ลด latency
 >
 > **Discord:** ใช้ WebSocket — ต้องการ bidirectional (user action ↔ server event)
 

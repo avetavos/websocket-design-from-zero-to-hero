@@ -120,32 +120,32 @@ Authenticate **ครั้งเดียว** ที่ handshake แล้ว
 
 export const quizAuthz = [
   {
-    q: 'How often must authorization run on a WebSocket connection?',
+    q: 'authorization ต้องรันบ่อยแค่ไหนบนการเชื่อมต่อ WebSocket?',
     options: [
-      'Once, at the handshake — the connection is then trusted',
-      'On every message/action, against the connection’s pinned identity',
-      'Only on messages that change data',
-      'Never — authentication is enough',
+      'ครั้งเดียวตอน handshake — จากนั้นก็เชื่อการเชื่อมต่อได้เลย',
+      'ทุก message/action โดยเทียบกับ identity ที่ pin ไว้กับการเชื่อมต่อ',
+      'เฉพาะ message ที่เปลี่ยนข้อมูลเท่านั้น',
+      'ไม่ต้องเลย — แค่ authentication ก็พอ',
     ],
     answer: 1,
   },
   {
-    q: 'A client sends { "type": "delete", "user": "admin" }. What should the server authorize against?',
+    q: 'client ส่ง { "type": "delete", "user": "admin" } มา server ควร authorize เทียบกับอะไร?',
     options: [
-      'The "user": "admin" field in the message',
-      'ws.user — the identity pinned to the connection at the handshake',
-      'The Origin header',
-      'Whichever identity is more privileged',
+      'field "user": "admin" ใน message',
+      'ws.user — identity ที่ pin ไว้กับการเชื่อมต่อตอน handshake',
+      'Origin header',
+      'identity ไหนก็ตามที่มีสิทธิ์สูงกว่า',
     ],
     answer: 1,
   },
   {
-    q: 'Why is authenticating the connection not sufficient to allow an action?',
+    q: 'ทำไมแค่ authenticate การเชื่อมต่อถึงยังไม่พอที่จะอนุญาต action?',
     options: [
-      'Because tokens always expire instantly',
-      'Because being logged in says who you are, not whether this specific action on this resource is permitted',
-      'Because WebSockets cannot carry identity',
-      'Because the Origin must be rechecked per message',
+      'เพราะ token หมดอายุทันทีเสมอ',
+      'เพราะการ login บอกว่าคุณเป็นใคร ไม่ได้บอกว่า action นี้บน resource นี้ถูกอนุญาตหรือไม่',
+      'เพราะ WebSocket พา identity ไม่ได้',
+      'เพราะต้องเช็ค Origin ซ้ำทุก message',
     ],
     answer: 1,
   },
