@@ -11,7 +11,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-WebSocket ให้ท่อหนึ่งท่อไปยังแต่ละ client สิ่งที่ทำแบบไร้เดียงสาที่สุดกับท่อนั้นคือ ดัน *ทุกอย่าง* ลงไปแล้วปล่อยให้ client คัดเองว่าตัวเองสนใจอะไร นั่นใช้ได้กับ demo หนึ่งตัวเป๊ะ ๆ แล้วก็พังทันที: แอปที่มีงานเยอะมี event หลายพันรายการต่อวินาที และผู้ใช้คนเดียวต้องการเพียงเศษเสี้ยวเล็กจิ๋วเท่านั้น **Publish/subscribe** คือ pattern ที่แก้ปัญหานี้ และมันคือกระดูกสันหลังของผลิตภัณฑ์ real-time แทบทุกตัวที่คุณเคยใช้
+WebSocket ให้ท่อหนึ่งท่อไปยังแต่ละ client สิ่งที่ทำแบบไร้เดียงสาที่สุดกับท่อนั้นคือ ดัน *ทุกอย่าง* ลงไปแล้วปล่อยให้ client คัดเองว่าตัวเองสนใจอะไร นั่นใช้ได้กับ demo หนึ่งตัวเป๊ะ ๆ แล้วก็พังทันที: แอปที่มีงานเยอะมี event หลายพันรายการต่อวินาที และผู้ใช้คนเดียวต้องการเพียงเศษเสี้ยวเล็กจิ๋วเท่านั้น **Publish/subscribe** คือ pattern ที่แก้ปัญหานี้ และเป็นกระดูกสันหลังของผลิตภัณฑ์ real-time แทบทุกตัวที่คุณเคยใช้
 
 ## แนวคิดหลัก
 
@@ -19,9 +19,9 @@ Pub/sub แบ่งโลกออกเป็น **topic** (เรียกอ
 
 - **Subscriber** บอก server ว่า *ตัวเองสนใจ topic ใดบ้าง* — `room:general`, `prices:BTC`, `doc:42`
 - **Publisher** ส่ง message *ไปยัง topic* โดยไม่รู้และไม่สนใจว่าใครกำลังฟังอยู่
-- **Broker** (server ของคุณ) เก็บแผนที่ว่า "ใคร subscribe อะไรบ้าง" และเมื่อ message มาถึงสำหรับ topic หนึ่ง มันจะส่งให้เฉพาะ subscriber ของ topic นั้นเท่านั้น
+- **Broker** (server ของคุณ) เก็บแผนที่ว่า "ใคร subscribe อะไรบ้าง" และเมื่อ message มาถึงสำหรับ topic หนึ่ง จะส่งให้เฉพาะ subscriber ของ topic นั้นเท่านั้น
 
-การแยกออกจากกัน (decoupling) คือแก่นของเรื่องทั้งหมด publisher ไม่เคยระบุถึงตัวบุคคล มันระบุถึง topic subscriber ไม่เคยเอ่ยชื่อผู้ส่ง มันเอ่ยถึงความสนใจ เพิ่มหรือลบฝั่งใดฝั่งหนึ่งแล้วอย่างอื่นก็ไม่เปลี่ยนแปลง
+การแยกออกจากกัน (decoupling) คือแก่นของเรื่องทั้งหมด publisher ไม่เคยระบุถึงตัวบุคคล แต่ระบุถึง topic ส่วน subscriber ก็ไม่เคยเอ่ยชื่อผู้ส่ง แต่เอ่ยถึงความสนใจ เพิ่มหรือลบฝั่งใดฝั่งหนึ่งแล้วอีกฝั่งก็ไม่เปลี่ยนแปลง
 
 <Mermaid title="การ publish หนึ่งครั้งไปยัง topic จะกระจายออกไปเฉพาะ subscriber ของ topic นั้น" code={pubsubDiagram} />
 
@@ -31,13 +31,13 @@ export const pubsubDiagram = `flowchart LR
   broker -- "room:general" --> b["client B<br/>subs: room:general"]
   broker -. "not subscribed" .-x c["client C<br/>subs: prices:BTC"]`;
 
-client C ไม่เคยได้ยิน message `room:general` — ไม่ใช่เพราะมันถูกกรองที่ฝั่ง client แต่เป็นเพราะ broker ไม่เคยส่งมันออกไป ความแตกต่างนี้สำคัญ: การกรองที่ฝั่ง client ยังต้องจ่ายทั้ง bandwidth และต้นทุนการปลุกเครื่องสำหรับทุก event Pub/sub ของจริงกรองที่ต้นทาง
+client C ไม่เคยได้ยิน message `room:general` — ไม่ใช่เพราะโดนกรองที่ฝั่ง client แต่เพราะ broker ไม่เคยส่งออกไปเลย ความแตกต่างนี้สำคัญ: การกรองที่ฝั่ง client ยังต้องจ่ายทั้ง bandwidth และต้นทุนการปลุกเครื่องสำหรับทุก event Pub/sub ของจริงกรองที่ต้นทาง
 
 ## Room ก็คือ topic นั่นเอง
 
-"Room" และ "channel" ไม่ใช่กลไกที่ต่างกัน — มันเป็นเพียงชื่อที่เป็นมิตรของ topic ที่ขอบเขตอยู่กับกลุ่มหนึ่ง `room:general` คือ topic เช่นเดียวกับ `room:swe-team` การเข้าร่วม room คือการ subscribe การออกคือการ unsubscribe เครื่องจักรชุดเดียวกันรองรับทั้งห้องแชต เซสชันทำงานร่วมกันต่อเอกสาร และ feed ราคาต่อสัญลักษณ์ เมื่อคุณมีแกน subscribe/publish ที่สะอาดแล้ว "room" ไม่ทำให้คุณเสียอะไรเพิ่ม
+"Room" และ "channel" ไม่ใช่กลไกที่ต่างกัน — เป็นเพียงชื่อที่เป็นมิตรของ topic ที่ขอบเขตอยู่กับกลุ่มหนึ่ง `room:general` คือ topic เช่นเดียวกับ `room:swe-team` การเข้าร่วม room คือการ subscribe การออกคือการ unsubscribe เครื่องจักรชุดเดียวกันรองรับทั้งห้องแชต เซสชันทำงานร่วมกันต่อเอกสาร และ feed ราคาต่อสัญลักษณ์ เมื่อคุณมีแกน subscribe/publish ที่สะอาดแล้ว "room" ไม่ทำให้คุณเสียอะไรเพิ่ม
 
-## รูปร่างของ message สำหรับมัน
+## รูปร่างของ message ที่ใช้
 
 Pub/sub ต้องการคำศัพท์เพียงเล็กน้อยบนสาย ฟิลด์ `type` บวกกับ `topic` ก็เพียงพอที่จะรองรับทุก operation:
 
@@ -52,9 +52,9 @@ type PubSubMessage =
 
 สามอันแรกคือคำสั่งที่ client ส่ง อันสุดท้ายคือสิ่งที่ server ส่งกลับมาเมื่อ event ตรงกับ subscription ของคุณตัวใดตัวหนึ่ง นั่นคือ protocol ทั้งหมด — ที่เหลือคือการจดบัญชีภายใน broker
 
-## ดูมันทำงานสด ๆ
+## ดูของจริงทำงานสด ๆ
 
-demo ด้านล่างคือ broker pub/sub ที่สมบูรณ์ในหน้านี้ ต่อสายเข้ากับ client จำลองสองตัวผ่าน WebSocket API จริง client A subscribe `room:general` ส่วน client B subscribe `prices:BTC` จากนั้นเรา publish ไปยังแต่ละ topic แล้วดูว่ามีเพียง client ที่ถูกต้องเท่านั้นที่ได้รับแต่ละ message รันมันแล้วอ่าน log: ทุกการส่งลงไปที่ subscriber เพียงตัวเดียวเป๊ะ ๆ ไม่เคยลงทั้งสองตัว
+demo ด้านล่างคือ broker pub/sub ที่สมบูรณ์ในหน้านี้ ต่อสายเข้ากับ client จำลองสองตัวผ่าน WebSocket API จริง client A subscribe `room:general` ส่วน client B subscribe `prices:BTC` จากนั้นเรา publish ไปยังแต่ละ topic แล้วดูว่ามีเพียง client ที่ถูกต้องเท่านั้นที่ได้รับแต่ละ message ลองรันแล้วอ่าน log: ทุกการส่งลงไปที่ subscriber เพียงตัวเดียวเป๊ะ ๆ ไม่เคยลงทั้งสองตัว
 
 export const pubsubDemoCode = `(function () {
   // A tiny in-page pub/sub broker. Each client is a mock socket with the real
@@ -119,7 +119,7 @@ export const pubsubDemoCode = `(function () {
 
 อ่าน output จากบนลงล่าง: A ได้ยินเฉพาะ `room:general` B ได้ยินเฉพาะ `prices:BTC` และการ publish ไปยัง `room:empty` ถูกส่งให้ subscriber ศูนย์ราย แล้วถูกทิ้งไปเงียบ ๆ บรรทัดสุดท้ายนั้นสำคัญ — การ publish ไปยัง topic ที่ไม่มีใครต้องการคือ no-op ซึ่งนี่แหละคือสิ่งที่ทำให้ publisher ปล่อย message ได้อย่างอิสระโดยไม่ต้องรู้จักผู้ฟัง
 
-## ทำไมมันถึงสเกลได้
+## ทำไมถึงสเกลได้
 
 broker ถือ `Map` จาก topic ไปยัง set ของ socket การส่ง event แตะเฉพาะ socket ใน set เดียวเท่านั้น ไม่เคยแตะตารางการเชื่อมต่อทั้งหมด นั่นคือเหตุผลที่ pub/sub สเกลตาม *ความสนใจ* แทนที่จะตาม *จำนวนการเชื่อมต่อทั้งหมด*: แอปที่มีผู้ใช้แสนคนซึ่งแต่ละคนดูสาม topic ก็ยังส่งแต่ละ event ให้แค่ไม่กี่คนที่ขอ และเมื่อต่อมาคุณรัน server หลาย instance โมเดลเดียวกันก็ขยายออกไปได้ — broker ที่ใช้ร่วมกัน (Redis, NATS, message bus) กระจายการ publish ข้าม instance ซึ่งก็คือ [pattern การสเกล](/websocket/th/scaling-and-pubsub/) ที่คุณเห็นมาก่อนหน้านี้เป๊ะ ๆ
 
@@ -130,7 +130,7 @@ broker ถือ `Map` จาก topic ไปยัง set ของ socket ก�
 | Direct | ส่งถึง connection เดียวโดยตรง | Private message, notification |
 | Broadcast | ส่งทุก connection บน server | System announcement |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ใช้ Global Broadcast เมื่อ Room เหมาะกว่า**
 อาการ:
@@ -144,7 +144,7 @@ broker ถือ `Map` จาก topic ไปยัง set ของ socket ก�
 - รับ event ที่ไม่ต้องการ — processing overhead
 - unsubscribe เมื่อ component unmount หรือ user ออกจาก context
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Slack:**
 > - channel = pub/sub topic — ส่ง message ไปยัง channel, member ทุกคนรับ
@@ -173,19 +173,19 @@ export const quizPubSub = [
     q: 'ทำไมการกรองที่ฝั่ง broker ถึงดีกว่าการปล่อยให้ทุก client รับทุกอย่างแล้วกรองเองในเครื่อง?',
     options: [
       'การกรองที่ฝั่ง client เป็นไปไม่ได้ใน JavaScript',
-      'มันหลีกเลี่ยงการจ่าย bandwidth และต้นทุนการปลุกเครื่องสำหรับ event ที่ client ไม่ต้องการ',
-      'มันเข้ารหัส message ให้อัตโนมัติ',
-      'มันรับประกันลำดับของ message',
+      'ไม่ต้องเสีย bandwidth และต้นทุนการปลุกเครื่องไปกับ event ที่ client ไม่ต้องการ',
+      'เข้ารหัส message ให้อัตโนมัติ',
+      'รับประกันลำดับของ message',
     ],
     answer: 1,
   },
   {
     q: 'ใน demo เกิดอะไรขึ้นเมื่อ message ถูก publish ไปยัง topic ที่ไม่มี subscriber?',
     options: [
-      'มันถูก broadcast ไปยังทุก client เป็น fallback',
-      'มันโยน error และปิดการเชื่อมต่อ',
-      'มันถูกส่งให้ subscriber ศูนย์รายแล้วถูกทิ้ง',
-      'มันถูกเข้าคิวจนกว่าจะมีคน subscribe',
+      'broadcast ไปยังทุก client เป็น fallback',
+      'โยน error แล้วปิดการเชื่อมต่อ',
+      'ส่งให้ subscriber ศูนย์ราย แล้วถูกทิ้งไป',
+      'เข้าคิวรอจนกว่าจะมีคน subscribe',
     ],
     answer: 2,
   },

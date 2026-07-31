@@ -1,6 +1,6 @@
 ---
 title: 'การออกแบบ Message'
-description: 'WebSocket มอบสตรีมของ bytes และ text แบบสองทิศทางดิบ ๆ ให้คุณ ส่วนคุณคือคนออกแบบ message protocol ที่ทำให้มันมีความหมาย ภาพรวมและเดโม JSON message แรก'
+description: 'WebSocket มอบ stream ของ bytes และ text แบบสองทิศทางดิบ ๆ ให้คุณ ส่วนคุณคือคนออกแบบ message protocol ที่ทำให้ stream นั้นมีความหมาย ภาพรวมและเดโม JSON message แรก'
 sidebar:
   order: 1
 ---
@@ -15,9 +15,9 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## socket นั้นว่างเปล่าโดยตั้งใจ
 
-นี่คือสิ่งที่ไม่มีใครบอกคุณตอนที่คุณหยิบ WebSocket มาใช้ครั้งแรก: API มอบ `send(data)` และ `onmessage(event)` ให้คุณ และนั่นคือ *ทั้งหมด* connection เป็นเหมือน **ท่อทึบ (opaque pipe)** มันยินดีจะรับส่ง string `'hi'` ก็ได้ JSON object ที่ถูกแปลงเป็น string ก็ได้ หรือ binary สักก้อนก็ได้ — และมันไม่มีความเห็นใด ๆ กับสิ่งเหล่านั้นเลย ไม่มีแนวคิดสำเร็จรูปของ "chat message", "request", "error" หรือ "version"
+นี่คือสิ่งที่ไม่มีใครบอกคุณตอนที่คุณหยิบ WebSocket มาใช้ครั้งแรก: API มอบ `send(data)` และ `onmessage(event)` ให้คุณ และนั่นคือ *ทั้งหมด* connection เป็นเหมือน **ท่อทึบ (opaque pipe)** จะส่ง string `'hi'` ก็ได้ JSON object ที่แปลงเป็น string แล้วก็ได้ หรือ binary สักก้อนก็ได้ — ท่อไม่มีความเห็นกับข้อมูลเหล่านั้นเลย ไม่มีแนวคิดสำเร็จรูปของ "chat message", "request", "error" หรือ "version"
 
-ความว่างเปล่านั้นคือฟีเจอร์ ไม่ใช่ความบกพร่อง HTTP ฝัง headers, status codes, methods และการต่อรอง content ไว้ในตัว ส่วน WebSocket แทบไม่ฝังอะไรเลยเพื่อให้ *คุณ* ออกแบบบทสนทนาได้ตรงตามที่แอปพลิเคชันต้องการ ด้านกลับของมันคือความรับผิดชอบ: **message ของคุณจะมีโครงสร้างแบบไหน ก็เพราะคุณเป็นคนใส่มันลงไปเอง**
+ความว่างเปล่านั้นคือฟีเจอร์ ไม่ใช่ความบกพร่อง HTTP ฝัง headers, status codes, methods และการต่อรอง content ไว้ในตัว ส่วน WebSocket แทบไม่ฝังอะไรเลยเพื่อให้ *คุณ* ออกแบบบทสนทนาได้ตรงตามที่แอปพลิเคชันต้องการ ด้านกลับกันคือความรับผิดชอบ: **message ของคุณจะมีโครงสร้างแบบไหน ก็เพราะคุณเป็นคนใส่ลงไปเอง**
 
 <Mermaid title="ชั้นต่าง ๆ: transport รับส่ง bytes ส่วน protocol ของคุณรับส่งความหมาย" code={overviewDiagram} />
 
@@ -34,7 +34,7 @@ export const overviewDiagram = `flowchart TB
   app --> proto --> ws
   ws -- "opaque bytes" --> ws`;
 
-ชั้นตรงกลางคือชั้นที่ไม่มีค่าเริ่มต้นใด ๆ การออกแบบมันให้ดีคือเส้นแบ่งระหว่าง protocol ที่คุณเติบโตมันต่อไปได้เป็นปี ๆ กับ protocol ที่กลายเป็นกองพันกันของ string ที่ต้องเขียนเงื่อนไขพิเศษเฉพาะกรณีไปเรื่อย ๆ
+ชั้นตรงกลางคือชั้นที่ไม่มีค่าเริ่มต้นมาให้เลย ออกแบบชั้นนี้ให้ดีคือเส้นแบ่งระหว่าง protocol ที่ต่อยอดไปได้เป็นปี ๆ กับ protocol ที่กลายเป็นกองพันกันของ string ซึ่งต้องเขียนเงื่อนไขพิเศษเฉพาะกรณีไปเรื่อย ๆ
 
 ## โมดูลนี้ครอบคลุมอะไรบ้าง
 
@@ -43,12 +43,12 @@ export const overviewDiagram = `flowchart TB
 1. **การออกแบบ Message (คุณอยู่ตรงนี้)** — ทำไม socket จึงว่างเปล่าและคุณคือคนใส่ความหมายลงไป
 2. **Framing messages** — WebSocket message นั้นแยกเป็นชิ้น ๆ อยู่แล้ว แต่คุณยังต้องมี protocol ระดับ *application* อยู่ดี หนึ่ง JSON object ต่อหนึ่ง message
 3. **JSON vs binary** — JSON ที่อ่านได้และใช้ได้ทุกที่ เทียบกับ format แบบ binary ที่กระชับอย่าง MessagePack, Protobuf และ CBOR และเมื่อไรแต่ละแบบจึงชนะ
-4. **Request/response over WebSocket** — socket นั้นเน้น message ไม่ใช่ request/reply คุณจึงเพิ่ม correlation `id` เพื่อจับคู่คำตอบกับคำถามของมัน
+4. **Request/response over WebSocket** — socket นั้นเน้น message ไม่ใช่ request/reply คุณจึงเพิ่ม correlation `id` เพื่อจับคู่คำตอบกลับไปยังคำถามต้นทาง
 5. **Schemas และ versioning** — message envelope การ validate สิ่งที่เข้ามา และการพัฒนา protocol โดยไม่ทำให้ client รุ่นเก่าพัง
 
 ## message ที่มีโครงสร้างชิ้นแรก
 
-ด้านล่างคือก้าวที่เล็กที่สุดที่ขยับขึ้นมาจากการส่ง text เปล่า ๆ: การส่ง **JSON object** แล้ว parse มันที่อีกฝั่งหนึ่ง มันรันในเบราว์เซอร์ของคุณกับ echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง — `onopen`, `onmessage`, `send`, `close` แบบเดียวกัน — จึงไม่ต้องสตาร์ท server ใด ๆ ในแอปจริง มีเพียงบรรทัดแรกเท่านั้นที่เปลี่ยนเป็น `new WebSocket('wss://your-server')`
+ด้านล่างคือก้าวที่เล็กที่สุดที่ขยับขึ้นมาจากการส่ง text เปล่า ๆ: การส่ง **JSON object** แล้ว parse ที่อีกฝั่ง โค้ดชุดนี้รันในเบราว์เซอร์ของคุณกับ echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง — `onopen`, `onmessage`, `send`, `close` แบบเดียวกัน — จึงไม่ต้องสตาร์ท server ใด ๆ ในแอปจริง มีเพียงบรรทัดแรกเท่านั้นที่เปลี่ยนเป็น `new WebSocket('wss://your-server')`
 
 สังเกตว่าทันทีที่เราส่ง *object* แทนที่จะเป็น string เปล่า ๆ ฝั่งรับสามารถถามคำถามที่มีความหมายได้: message นี้ *ชนิดอะไร*? *ใคร* เป็นคนส่ง? เมื่อไร?
 
@@ -89,7 +89,7 @@ export const firstJsonCode = `(function () {
 
 <NodeRunner client:visible code={firstJsonCode} />
 
-socket รับส่ง text ทั้งสองทิศทางและไม่เคยสนใจเลยสักครั้งว่ามันคือ JSON โครงสร้าง — `type`, `from`, `text` — มีอยู่ได้ก็เพราะ *เรา* ตกลงกันและใส่มันลงไปเอง ทุกบทเรียนที่ตามมาคือการขัดเกลาข้อตกลงนั้นให้ดียิ่งขึ้น
+socket รับส่ง text ทั้งสองทิศทางโดยไม่เคยสนใจเลยสักครั้งว่าข้างในเป็น JSON โครงสร้าง — `type`, `from`, `text` — มีอยู่ได้ก็เพราะ *เรา* ตกลงกันแล้วใส่ลงไปเอง ทุกบทเรียนที่ตามมาคือการขัดเกลาข้อตกลงนั้นให้ดียิ่งขึ้น
 
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">
 WebSocket รับส่ง **สตรีมแบบทึบ (opaque stream)** ของ bytes และ text โดยไม่มีความหมายในตัว ส่วน message protocol — types, fields, ids, versions — คือสิ่งที่ **คุณออกแบบและวางทับลงไป** และโมดูลนี้จะแสดงให้คุณเห็นว่าทำอย่างไร
@@ -99,10 +99,10 @@ export const quizIndex = [
   {
     q: 'WebSocket transport ให้ความหมายอะไรกับข้อมูลที่คุณส่ง?',
     options: [
-      'มันติด type และ timestamp ให้ทุก message',
-      'ไม่มีเลย — มันรับส่ง bytes และ text แบบทึบ ส่วนโครงสร้างคุณเป็นคนใส่เอง',
-      'มัน validate message กับ schema สำเร็จรูป',
-      'มันแปลง object เป็น JSON ให้อัตโนมัติ',
+      'ติด type และ timestamp ให้ทุก message',
+      'ไม่มีเลย — รับส่ง bytes และ text แบบทึบ ส่วนโครงสร้างคุณเป็นคนใส่เอง',
+      'validate message กับ schema สำเร็จรูป',
+      'แปลง object เป็น JSON ให้อัตโนมัติ',
     ],
     answer: 1,
   },
@@ -119,10 +119,10 @@ export const quizIndex = [
   {
     q: 'ข้อใดอธิบายบทบาทของชั้น message-protocol ได้ดีที่สุด?',
     options: [
-      'มันถูกจัดเตรียมโดยเบราว์เซอร์และเปลี่ยนแปลงไม่ได้',
-      'มันอยู่ระหว่าง application ของคุณกับ transport เพื่อให้ความหมายแก่ bytes',
-      'มันเข้ามาแทนที่ WebSocket connection ทั้งหมด',
-      'มันจำเป็นเฉพาะกับข้อมูล binary เท่านั้น',
+      'เบราว์เซอร์เตรียมมาให้และแก้ไม่ได้',
+      'อยู่ระหว่าง application ของคุณกับ transport เพื่อให้ความหมายแก่ bytes',
+      'เข้ามาแทนที่ WebSocket connection ทั้งหมด',
+      'จำเป็นเฉพาะกับข้อมูล binary เท่านั้น',
     ],
     answer: 1,
   },

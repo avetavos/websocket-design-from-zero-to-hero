@@ -1,6 +1,6 @@
 ---
 title: 'Connection State'
-description: 'การแนบ state ต่อ connection — user id, subscriptions — ให้แต่ละ socket และ clean up มันอย่างน่าเชื่อถือตอน close พร้อมเดโม Node ws ที่รันได้จริง'
+description: 'การแนบ state ต่อ connection — user id, subscriptions — ให้แต่ละ socket และ clean up อย่างน่าเชื่อถือตอน close พร้อมเดโม Node ws ที่รันได้จริง'
 sidebar:
   order: 3
 ---
@@ -11,7 +11,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-socket เปล่า ๆ นั้นไร้ตัวตน server รู้ว่ามี client *รายหนึ่ง* เชื่อมต่ออยู่ แต่ไม่รู้ว่าพวกเขาเป็น **ใคร** หรือสนใจอะไร แอปพลิเคชันจริงต้องตอบคำถามอย่าง "นี่คือ user คนไหน?" และ "พวกเขา subscribe อะไรไว้บ้าง?" — และคำตอบต้องเดินทางไปกับ connection ตลอดอายุของมัน นั่นคือ **per-connection state**
+socket เปล่า ๆ นั้นไร้ตัวตน server รู้ว่ามี client *รายหนึ่ง* เชื่อมต่ออยู่ แต่ไม่รู้ว่าพวกเขาเป็น **ใคร** หรือสนใจอะไร แอปพลิเคชันจริงต้องตอบคำถามอย่าง "นี่คือ user คนไหน?" และ "พวกเขา subscribe อะไรไว้บ้าง?" — และคำตอบต้องเดินทางไปกับ connection ตลอดอายุของตัวเอง นั่นคือ **per-connection state**
 
 ## ทำไม state ต้องอยู่ที่ไหนสักแห่ง
 
@@ -21,7 +21,7 @@ socket เปล่า ๆ นั้นไร้ตัวตน server รู้
 - **Subscriptions** — room, channel, หรือ topic ใดที่ socket นี้ต้องการ
 - **Bookkeeping** — เวลาที่พวกเขาเชื่อมต่อ, ครั้งล่าสุดที่คุณได้ยินจากพวกเขา (สำหรับ heartbeat), counter ต่อ socket
 
-ที่ตามธรรมชาติสำหรับวางทั้งหมดนี้คือ *บนตัว socket object เอง* เพื่อว่าที่ไหนก็ตามที่คุณมี `ws` คุณก็มี context ของมัน
+ที่ตามธรรมชาติสำหรับวางทั้งหมดนี้คือ *บนตัว socket object เอง* เพื่อว่าที่ไหนก็ตามที่คุณมี `ws` คุณก็มี context ของตัวเอง
 
 ## การแนบ state ให้ socket
 
@@ -60,7 +60,7 @@ wss.on('connection', (ws, req) => {
 
 ## การ mutate state เมื่อข้อความเข้ามา
 
-state ไม่ได้ถูกแช่แข็งไว้ตอน connect — มันวิวัฒน์ ข้อความ `subscribe` ควรเพิ่มเข้า set; ข้อความ `unsubscribe` ควรลบออกจากมัน:
+state ไม่ได้ถูกแช่แข็งไว้ตอน connect — แต่เปลี่ยนไปเรื่อย ๆ ข้อความ `subscribe` ควรเพิ่มเข้า set; ข้อความ `unsubscribe` ควรลบออกจาก set:
 
 ```ts
 ws.on('message', (data) => {
@@ -77,7 +77,7 @@ set `subscriptions` ต่อ socket นี้คือเมล็ดพัน�
 
 ## Clean up ตอน close — เสมอ
 
-นี่คือกฎที่แยก server ที่แข็งแรงออกจาก server ที่รั่ว: **ทุก state ที่คุณสร้างตอน connect คุณต้องรื้อทิ้งตอน close** socket ที่ disconnect แต่ทิ้ง entry ของมันไว้ใน `Map` หรือทิ้ง id ของมันไว้ใน room set คือ memory leak และ bug ด้านความถูกต้อง — คุณอาจ broadcast ไปหา ghost
+นี่คือกฎที่แยก server ที่แข็งแรงออกจาก server ที่รั่ว: **ทุก state ที่คุณสร้างตอน connect คุณต้องรื้อทิ้งตอน close** socket ที่ disconnect แต่ทิ้ง entry ของตัวเองไว้ใน `Map` หรือทิ้ง id ของตัวเองไว้ใน room set คือ memory leak และ bug ด้านความถูกต้อง — คุณอาจ broadcast ไปหา ghost
 
 <Mermaid title="วงจรชีวิตของ per-connection state" code={lifecycleDiagram} />
 
@@ -102,7 +102,7 @@ ws.on('error', () => cleanup(ws));
 
 ## ดู state ทำงานจริง
 
-เดโมด้านล่างเก็บ per-connection state (user id ที่ได้มาตอน connect บวกกับ subscription set), mutate มันบนข้อความ `subscribe`/`unsubscribe`, และพิมพ์บรรทัดรื้อถอนตอน close เปิดมันใน StackBlitz แล้วเชื่อมต่อ — บรรทัด client ที่ปรับแล้วระบุไว้ใน comment
+เดโมด้านล่างเก็บ per-connection state (user id ที่ได้มาตอน connect บวกกับ subscription set), mutate state บนข้อความ `subscribe`/`unsubscribe`, และพิมพ์บรรทัดรื้อถอนตอน close เปิดใน StackBlitz แล้วเชื่อมต่อ — บรรทัด client ที่ปรับแล้วระบุไว้ใน comment
 
 export const stateCode = `// Per-connection state, attached to this socket. ws/wss/req in scope.
 const userId = 'user-' + Math.floor(Math.random() * 1000);
@@ -149,7 +149,7 @@ ws.on('error', cleanup);
 | Message history | Database | Audit, replay capability |
 | Presence (online/offline) | Redis + WebSocket event | Real-time, expire อัตโนมัติ |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **เก็บ State มากเกินในทุก Connection**
 อาการ:
@@ -163,7 +163,7 @@ ws.on('error', cleanup);
 - memory leak — server ช้าลงตามเวลา
 - implement `ws.on('close', () => { connections.delete(userId) })` เสมอ
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Discord:**
 > - เก็บ userId, guildIds, channel subscriptions ต่อ WebSocket connection
@@ -174,7 +174,7 @@ ws.on('error', cleanup);
 > - ข้อมูลหนักอยู่ใน database, query เมื่อต้องการ
 
 <Callout title="state เข้า, state ออก">
-แก้ identity **หนึ่งครั้ง** ตอน connect แล้วแนบ state (user id, subscriptions) เข้ากับ socket หรือ side-table `Map` mutate มันเมื่อข้อความเข้ามา — และลบ **ทุก** ชิ้นส่วนของมันออกตอน `close` *และ* `error` state ที่ไม่ได้ clean up คือ memory leak และเป็นต้นตอของ ghost broadcast
+แก้ identity **หนึ่งครั้ง** ตอน connect แล้วแนบ state (user id, subscriptions) เข้ากับ socket หรือ side-table `Map` mutate state เมื่อข้อความเข้ามา — และลบ **ทุก** ชิ้นส่วนของตัวเองออกตอน `close` *และ* `error` state ที่ไม่ได้ clean up คือ memory leak และเป็นต้นตอของ ghost broadcast
 </Callout>
 
 export const quizState = [
@@ -204,7 +204,7 @@ export const quizState = [
       'error ไม่เคยทำให้ socket disconnect',
       'error มักจะมาก่อนการ disconnect แบบเงียบ ๆ ดังนั้นทั้งสองเส้นทางต้องปล่อย state',
       'close และ error เป็น event เดียวกัน',
-      'มันทำให้ความเร็ว connection เพิ่มเป็นสองเท่า',
+      'ทำให้ความเร็ว connection เพิ่มเป็นสองเท่า',
     ],
     answer: 1,
   },

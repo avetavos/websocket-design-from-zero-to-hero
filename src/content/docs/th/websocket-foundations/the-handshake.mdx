@@ -10,9 +10,9 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-WebSocket ไม่ได้โผล่ขึ้นมาจากอากาศ มันเริ่มต้นชีวิตในฐานะ HTTP request ที่ธรรมดาสมบูรณ์แบบ แล้วจึงถูก *upgrade* ในที่ การเข้าใจ handshake นี้คลายความลึกลับได้มากมาย: ทำไม WebSocket ถึงเดินทางบนพอร์ตเดียวกันกับทราฟฟิกเว็บ ทำไมมันถึงผ่าน proxy และ firewall ส่วนใหญ่ได้ และทำไม scheme `ws://` และ `wss://` ถึงสะท้อน `http://` และ `https://`
+WebSocket ไม่ได้โผล่ขึ้นมาจากอากาศ แต่เริ่มต้นชีวิตในฐานะ HTTP request ธรรมดา ๆ แล้วค่อย *upgrade* ตัวเองในที่ การเข้าใจ handshake นี้คลายความลึกลับได้มากมาย: ทำไม WebSocket ถึงวิ่งบนพอร์ตเดียวกับทราฟฟิกเว็บ ทำไมถึงลอดผ่าน proxy และ firewall ส่วนใหญ่ได้ และทำไม scheme `ws://` กับ `wss://` ถึงสะท้อน `http://` และ `https://`
 
-## มันเริ่มต้นในฐานะ HTTP
+## ทุกอย่างเริ่มต้นในฐานะ HTTP
 
 client เปิด TCP connection ธรรมดาและส่ง HTTP `GET` request — แต่พร้อม header พิเศษที่บอกว่า "ฉันอยากสลับการเชื่อมต่อนี้ไปเป็นโปรโตคอล WebSocket" สอง header ที่ทำงานจริงคือ `Upgrade: websocket` และ `Sec-WebSocket-Key`
 
@@ -26,15 +26,15 @@ Sec-WebSocket-Version: 13
 Origin: https://example.com
 ```
 
-มีบางตัวในนี้ที่สมควรกับตำแหน่งของมัน:
+มีบางตัวในนี้ที่ควรรู้จักไว้:
 
 - **`Upgrade: websocket`** และ **`Connection: Upgrade`** ทำงานร่วมกันเพื่อส่งสัญญาณการสลับโปรโตคอล
-- **`Sec-WebSocket-Key`** เป็นค่าสุ่มที่เข้ารหัส base64 ซึ่ง client สร้างขึ้นใหม่สำหรับการเชื่อมต่อนี้ มัน *ไม่ใช่* ความลับด้านความปลอดภัย มันมีอยู่เพื่อให้ client ยืนยันได้ว่า response มาจาก server ที่เข้าใจ WebSocket handshake อย่างแท้จริง
+- **`Sec-WebSocket-Key`** เป็นค่าสุ่มที่เข้ารหัส base64 ซึ่ง client สร้างขึ้นใหม่สำหรับการเชื่อมต่อนี้ *ไม่ใช่* ความลับด้านความปลอดภัย แต่มีไว้ให้ client ยืนยันว่า response มาจาก server ที่เข้าใจ WebSocket handshake จริง ๆ
 - **`Sec-WebSocket-Version: 13`** ตรึงเวอร์ชันของโปรโตคอลไว้ (13 คือเวอร์ชันมาตรฐาน)
 
 ## Response แบบ 101
 
-ถ้า server พูด WebSocket ได้และยอมรับ มันจะตอบกลับด้วยสถานะ **`101 Switching Protocols`** — สถานะ HTTP ที่มีความหมายตรงตัวว่า "เราเสร็จสิ้นกับ semantics ของ HTTP บนการเชื่อมต่อนี้แล้ว จากนี้ไปมันเป็นโปรโตคอลที่ต่างออกไป"
+ถ้า server พูด WebSocket ได้และยอมรับ ก็จะตอบกลับด้วยสถานะ **`101 Switching Protocols`** — สถานะ HTTP ที่แปลตรงตัวว่า "จบ semantics ของ HTTP บนการเชื่อมต่อนี้แล้ว จากนี้ไปเป็น protocol คนละตัว"
 
 ```http
 HTTP/1.1 101 Switching Protocols
@@ -43,7 +43,7 @@ Connection: Upgrade
 Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
 ```
 
-ความมหัศจรรย์อยู่ที่ **`Sec-WebSocket-Accept`** server นำ `Sec-WebSocket-Key` ของ client มา ต่อท้ายด้วยสตริงคงที่ที่รู้จักกันดีซึ่งกำหนดโดย spec แฮชผลลัพธ์ด้วย SHA-1 แล้วเข้ารหัส base64 client คำนวณค่าเดียวกันและตรวจสอบว่าตรงกันไหม ถ้าตรงกัน client ก็รู้ว่ามันกำลังคุยกับ server WebSocket จริง ๆ ไม่ใช่ เช่น cache ที่คืน `101` กลับมาแบบมั่ว ๆ ไม่ตรงกัน ก็ไม่มีการเชื่อมต่อ
+ความมหัศจรรย์อยู่ที่ **`Sec-WebSocket-Accept`** server เอา `Sec-WebSocket-Key` ของ client มาต่อท้ายด้วย string คงที่ที่ spec กำหนดไว้ แฮชด้วย SHA-1 แล้วเข้ารหัส base64 ฝั่ง client คำนวณค่าเดียวกันแล้วเทียบว่าตรงกันไหม ถ้าตรง ก็แปลว่ากำลังคุยกับ server WebSocket ตัวจริง ไม่ใช่ cache ที่บังเอิญคืน `101` กลับมาแบบมั่ว ๆ ถ้าไม่ตรง ก็ไม่มีการเชื่อมต่อ
 
 ## Handshake ตามลำดับ
 
@@ -60,20 +60,20 @@ export const handshakeDiagram = `sequenceDiagram
   C->>S: data frame
   S->>C: data frame`;
 
-สังเกตสิ่งที่ไดอะแกรม *ไม่ได้* แสดง: การเชื่อมต่อเส้นที่สอง หลัง `101` client และ server ยังคงใช้ **TCP connection เดิม** ที่มีอยู่แล้วต่อไป ไม่มีอะไรถูกเปิดใหม่ HTTP request เป็นเพียงประตูทางเข้า เมื่อผ่านมันไปแล้ว ทั้งสองฝ่ายหยุดแลกเปลี่ยนข้อความ HTTP และเริ่มแลกเปลี่ยน WebSocket frame (หัวข้อของบทเรียนถัดไป)
+สังเกตสิ่งที่ไดอะแกรม *ไม่ได้* แสดง: การเชื่อมต่อเส้นที่สอง หลัง `101` client และ server ยังคงใช้ **TCP connection เดิม** ที่มีอยู่แล้วต่อไป ไม่มีอะไรเปิดใหม่ HTTP request เป็นแค่ประตูทางเข้า พอผ่านประตูไปแล้ว ทั้งสองฝ่ายก็เลิกแลกเปลี่ยน message แบบ HTTP แล้วเริ่มแลกเปลี่ยน WebSocket frame แทน (หัวข้อของบทเรียนถัดไป)
 
 ## ทำไมการออกแบบนี้ถึงฉลาด
 
-เพราะ handshake *คือ* HTTP request การเชื่อมต่อ WebSocket จึงสามารถวิ่งบนพอร์ต 80 และ 443 เคียงข้างทราฟฟิกเว็บปกติ นำ TLS ที่มีอยู่มาใช้ซ้ำสำหรับ `wss://` และลอดผ่าน proxy และ load balancer ที่เข้าใจ HTTP อยู่แล้ว โปรโตคอลได้ระยะเอื้อมของเว็บมาฟรี ๆ แล้วจึงสลัด request/response model ของ HTTP ทิ้งทันทีที่ไม่ต้องการมันอีกต่อไป
+เพราะ handshake *คือ* HTTP request การเชื่อมต่อ WebSocket จึงสามารถวิ่งบนพอร์ต 80 และ 443 เคียงข้างทราฟฟิกเว็บปกติ นำ TLS ที่มีอยู่มาใช้ซ้ำสำหรับ `wss://` และลอดผ่าน proxy และ load balancer ที่เข้าใจ HTTP อยู่แล้ว protocol จึงได้ระยะเอื้อมของเว็บมาฟรี ๆ แล้วสลัด request/response model ของ HTTP ทิ้งทันทีที่ไม่ต้องใช้แล้ว
 
-| Benefits (WebSocket Handshake) | Trade-offs |
+| ข้อดี (WebSocket Handshake) | ข้อแลกเปลี่ยน |
 |---|---|
 | ใช้ HTTP infrastructure เดิม — ผ่าน firewall และ proxy ได้ | handshake round-trip เพิ่ม latency ตอนเปิด connection ครั้งแรก |
 | วิ่งบน port 80/443 ร่วมกับ HTTP ธรรมดา | proxy เก่าที่ไม่รู้จัก WebSocket อาจ block Upgrade header |
 | `Sec-WebSocket-Accept` ป้องกัน cache ที่ไม่เข้าใจ WS | ต้องการ server-side support — ไม่ใช่ทุก server ที่ support |
 | TLS (`wss://`) ต่อยอดจาก HTTPS ที่มีอยู่แล้ว | HTTP/2 multiplexing ไม่ทำงานกับ WebSocket — ต้องใช้ HTTP/1.1 |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ไม่ Validate Origin ใน Handshake**
 อาการ:
@@ -86,7 +86,7 @@ export const handshakeDiagram = `sequenceDiagram
 - รับ handshake ก่อน ค่อย auth ทีหลัง ทำให้ connection เปิดอยู่ชั่วคราวโดยไม่ตรวจสอบ
 - attach auth token ใน handshake (query param หรือ header) และ validate ก่อน respond 101
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Binance WebSocket API:**
 > - ใช้ WSS handshake บน `wss://stream.binance.com:9443`
@@ -115,10 +115,10 @@ export const quizHandshake = [
   {
     q: 'จุดประสงค์ของ Sec-WebSocket-Key และ Sec-WebSocket-Accept คืออะไร?',
     options: [
-      'มันเข้ารหัสทราฟฟิก WebSocket ทั้งหมด',
-      'มันให้ client ยืนยันได้ว่า response มาจาก server WebSocket จริง ๆ',
-      'มันยืนยันตัวตนผู้ใช้ที่ล็อกอินอยู่',
-      'มันบีบอัด header ของ handshake',
+      'เข้ารหัสทราฟฟิก WebSocket ทั้งหมด',
+      'ให้ client ยืนยันได้ว่า response มาจาก server WebSocket จริง ๆ',
+      'ยืนยันตัวตนผู้ใช้ที่ล็อกอินอยู่',
+      'บีบอัด header ของ handshake',
     ],
     answer: 1,
   },
@@ -128,7 +128,7 @@ export const quizHandshake = [
       'มีการเปิด TCP connection ใหม่สำหรับ frame',
       'TCP connection เดิมถูกนำกลับมาใช้ซ้ำเพื่อขนส่ง WebSocket frame',
       'client poll ผ่าน HTTP ต่อจากนั้นไป',
-      'server ปิดมันแล้วรอการเชื่อมต่อใหม่',
+      'server ปิดการเชื่อมต่อแล้วรอเส้นใหม่',
     ],
     answer: 1,
   },

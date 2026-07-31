@@ -15,7 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## การ broadcast ไปยังทุกคน
 
-ไลบรารี `ws` ให้ `wss.clients` มา ซึ่งเป็น `Set` ของทุก socket ที่เปิดอยู่ในขณะนั้น เพื่อส่งอะไรบางอย่างไปยังพวกเขาทั้งหมด ให้วน loop แล้ว send — โดยตรวจก่อนว่าแต่ละ socket เปิดอยู่จริง:
+ไลบรารี `ws` ให้ `wss.clients` มา ที่เป็น `Set` ของทุก socket ที่เปิดอยู่ในขณะนั้น เพื่อส่งอะไรบางอย่างไปยังพวกเขาทั้งหมด ให้วน loop แล้ว send — โดยตรวจก่อนว่าแต่ละ socket เปิดอยู่จริง:
 
 ```ts
 import { WebSocket } from 'ws';
@@ -29,7 +29,7 @@ function broadcastAll(wss, message) {
 }
 ```
 
-การ์ด `readyState === WebSocket.OPEN` มีความสำคัญ: socket อาจอยู่ระหว่างปิดหรือกำลังจะปิดอยู่แล้ว และการเรียก `send` บนมันจะ throw หรือ buffer แบบเงียบ ๆ กรองให้เหลือเฉพาะ OPEN ก่อน send เสมอ นี่คือ broadcast ที่ง่ายที่สุดเท่าที่จะเป็นไปได้ — มีประโยชน์สำหรับประกาศแบบ global แต่เป็นค้อนปอนด์สำหรับอะไรที่ต้องเจาะจง
+การ์ด `readyState === WebSocket.OPEN` มีความสำคัญ: socket อาจอยู่ระหว่างปิดหรือกำลังจะปิดอยู่แล้ว และการเรียก `send` ตอนนั้นจะ throw หรือ buffer แบบเงียบ ๆ กรองให้เหลือเฉพาะ OPEN ก่อน send เสมอ นี่คือ broadcast ที่ง่ายที่สุดเท่าที่จะเป็นไปได้ — มีประโยชน์สำหรับประกาศแบบ global แต่เป็นค้อนปอนด์สำหรับอะไรที่ต้องเจาะจง
 
 ## Rooms: การ broadcast ไปยังกลุ่มย่อย
 
@@ -55,7 +55,7 @@ function broadcastRoom(room, message) {
 }
 ```
 
-ตอนนี้ข้อความ fan ออกไปเฉพาะ socket ที่ join room นั้น — ไม่ใช่ทั้ง server สังเกตความสมมาตรกับบทเรียนก่อนหน้า: set `state.subscriptions` ของแต่ละ socket คือมุมมองของ *client* ต่อ room ของมัน ขณะที่ `rooms` map นี้คือ reverse index ของ *server* รักษาให้ทั้งสอง sync กันไว้
+ตอนนี้ข้อความ fan ออกไปเฉพาะ socket ที่ join room นั้น — ไม่ใช่ทั้ง server สังเกตความสมมาตรกับบทเรียนก่อนหน้า: set `state.subscriptions` ของแต่ละ socket คือมุมมองของ *client* ต่อ room ของตัวเอง ขณะที่ `rooms` map นี้คือ reverse index ของ *server* รักษาให้ทั้งสอง sync กันไว้
 
 <Mermaid title="Fan-out: ข้อความไปยัง room หนึ่งไปถึงเฉพาะสมาชิกของ room นั้น" code={fanoutDiagram} />
 
@@ -80,11 +80,11 @@ for (const client of rooms.get(room) ?? []) {
 }
 ```
 
-จะรวมผู้ส่งหรือไม่นั้นเป็นทางเลือกของแอปพลิเคชัน — บางแอป echo กลับเพื่อให้ UI ของผู้ส่งยืนยันว่า server ได้รับแล้ว ไม่ว่าทางใด toggle `client !== sender` คือวิธีที่คุณควบคุมมัน
+จะรวมผู้ส่งหรือไม่นั้นเป็นทางเลือกของแอปพลิเคชัน — บางแอป echo กลับเพื่อให้ UI ของผู้ส่งยืนยันว่า server ได้รับแล้ว ไม่ว่าทางใด toggle `client !== sender` คือสวิตช์ที่คุณใช้ควบคุม
 
 ## broadcast server ที่รันได้จริง
 
-เดโมด้านล่าง implement room บน `ws` server จริง client ส่ง `{"type":"join","room":"x"}` เพื่อ join จากนั้น `{"type":"say","text":"hi"}` เพื่อ broadcast ไปยังทุกคนใน room ของมัน การ cleanup ตอน close จะลบ socket ออกจาก room ของมันเพื่อให้คุณไม่ broadcast ไปหา ghost เปิดมันใน StackBlitz แล้วเชื่อมต่อ client สองสามตัวเข้า room เดียวกัน
+เดโมด้านล่าง implement room บน `ws` server จริง client ส่ง `{"type":"join","room":"x"}` เพื่อ join จากนั้น `{"type":"say","text":"hi"}` เพื่อ broadcast ไปยังทุกคนใน room ของตัวเอง การ cleanup ตอน close จะลบ socket ออกจาก room ของตัวเองเพื่อให้คุณไม่ broadcast ไปหา ghost เปิดใน StackBlitz แล้วเชื่อมต่อ client สองสามตัวเข้า room เดียวกัน
 
 export const broadcastCode = `// Real ws broadcast server. ws/wss/req in scope.
 // A module-level Map survives across connections (declared once on the server).
@@ -142,7 +142,7 @@ ws.on('error', leaveRoom);`;
 | Direct message | connection เดียว | Private message, personal notification |
 | Selective broadcast | connection ที่ match criteria | Geographic region, subscription tier |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **Broadcast ทุก Message ไปทุก Connection**
 อาการ:
@@ -156,7 +156,7 @@ ws.on('error', leaveRoom);`;
 - message broadcast ไปยัง connection ที่ dead — error ทุกครั้ง
 - remove จาก room ใน `close` event เสมอ
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Discord:**
 > - room = channel — message broadcast เฉพาะ member ที่ join channel
@@ -167,7 +167,7 @@ ws.on('error', leaveRoom);`;
 > - user ออกจาก document → remove จาก room อัตโนมัติ
 
 <Callout title="ทุกคน vs room">
-`wss.clients` คือ set ของทุก socket — วน loop มัน (โดยการ์ดด้วย `readyState === OPEN`) เพื่อ broadcast ไปยังทุกคน สำหรับการส่งแบบเจาะจง เก็บ `Map<room, Set<ws>>` ไว้, fan ออกไปเฉพาะสมาชิกของ room นั้น, ข้ามผู้ส่งได้ตามต้องการ, และลบ socket ออกจาก room ของมันตอน close
+`wss.clients` คือ set ของทุก socket — วน loop set นี้ (โดยการ์ดด้วย `readyState === OPEN`) เพื่อ broadcast ไปยังทุกคน สำหรับการส่งแบบเจาะจง เก็บ `Map<room, Set<ws>>` ไว้, fan ออกไปเฉพาะสมาชิกของ room นั้น, ข้ามผู้ส่งได้ตามต้องการ, และลบ socket ออกจาก room ของตัวเองตอน close
 </Callout>
 
 export const quizRooms = [

@@ -1,6 +1,6 @@
 ---
 title: 'Request/Response over WebSocket'
-description: 'WebSocket เน้น message ไม่ใช่ request/response เพิ่ม correlation id เพื่อให้จับคู่ reply กับ request ของมันได้ เดโมสดของชั้น request/reply เล็ก ๆ บน socket ภายในหน้า'
+description: 'WebSocket เน้น message ไม่ใช่ request/response เพิ่ม correlation id เพื่อให้จับคู่ reply กับ request ของตัวเองได้ เดโมสดของชั้น request/reply เล็ก ๆ บน socket ภายในหน้า'
 sidebar:
   order: 4
 ---
@@ -11,7 +11,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-นักพัฒนาที่มาจาก HTTP แบกข้อสมมติที่ฝังลึกมาด้วย: *ฉันเรียกเอง response นี้ก็เลยเป็นของฉัน* ด้วย `fetch` คำตอบที่คุณ `await` คือคำตอบของคำถามที่คุณถามอย่างไม่กำกวม WebSocket ถอดการรับประกันนั้นออกไปเงียบ ๆ — และการได้มันคืนมาคือหนึ่งในแพตเทิร์นที่มีประโยชน์ที่สุดในการออกแบบ message
+นักพัฒนาที่มาจาก HTTP แบกข้อสมมติที่ฝังลึกมาด้วย: *ฉันเรียกเอง response นี้ก็เลยเป็นของฉัน* ด้วย `fetch` คำตอบที่คุณ `await` คือคำตอบของคำถามที่คุณถามอย่างไม่กำกวม WebSocket ถอดการรับประกันนั้นออกไปเงียบ ๆ — และการได้การรับประกันนั้นคืนมาคือหนึ่งในแพตเทิร์นที่มีประโยชน์ที่สุดในการออกแบบ message
 
 ## socket เน้น message ไม่ใช่ request/reply
 
@@ -23,9 +23,9 @@ WebSocket ไม่มีแนวคิดของ request ที่จับ�
 
 ถ้าคุณยิง request "fetch user" ออกไปสามครั้งและผลลัพธ์กลับมาสามอัน **ไม่มีอะไรใน transport บอกคุณว่าผลลัพธ์ไหนตอบ request ไหน** reply อาจมาถึงผิดลำดับ สลับกับ push คุณพึ่งพาลำดับไม่ได้ และคุณ `await` `send` ไม่ได้แน่นอน
 
-## correlation id ผูก reply เข้ากับ request ของมัน
+## correlation id ผูก reply เข้ากับ request ของตัวเอง
 
-วิธีแก้คือ field เดียวที่คุณรู้วิธีเพิ่มอยู่แล้ว: **`id`** ที่ไม่ซ้ำกันบนแต่ละ request ซึ่ง server **สะท้อนกลับ (echoes)** บน reply ที่จับคู่กัน client เก็บตารางเล็ก ๆ ของ *id → "ใครกำลังรออันนี้"* และเมื่อ reply มาถึง มันค้นหา id, resolve ผู้รอนั้น แล้วลบ entry ออก reply ของ id ที่ไม่รู้จัก (หรือ message ที่ไม่มี id เลย) ถูกถือว่าเป็น server push
+วิธีแก้คือ field เดียวที่คุณรู้วิธีเพิ่มอยู่แล้ว: **`id`** ที่ไม่ซ้ำกันบนแต่ละ request ซึ่ง server **สะท้อนกลับ (echoes)** บน reply ที่จับคู่กัน client เก็บตารางเล็ก ๆ ของ *id → "ใครกำลังรออันนี้"* และเมื่อ reply มาถึง client ก็ค้นหา id, resolve ผู้รอนั้น แล้วลบ entry ออก reply ของ id ที่ไม่รู้จัก (หรือ message ที่ไม่มี id เลย) ถูกถือว่าเป็น server push
 
 <Mermaid title="การจับคู่ reply เข้ากับ request ด้วย id ที่สะท้อนกลับ" code={correlationDiagram} />
 
@@ -40,11 +40,11 @@ export const correlationDiagram = `sequenceDiagram
   S-->>C: { type: 'reply', id: 'r1', age: 30 }
   C->>C: look up r1, resolve alice's waiter`;
 
-นี่คือวิธีที่ request/response *รู้สึก* เหมือน HTTP อีกครั้งพอดี — แต่สร้างด้วยมือ บนสตรีม ด้วย correlation field เดียว การห่อมันใน promise ทำให้จุดที่เรียกอ่านเหมือน `await` ธรรมดา
+นี่คือวิธีที่ request/response *รู้สึก* เหมือน HTTP อีกครั้งพอดี — แต่สร้างด้วยมือ บนสตรีม ด้วย correlation field เดียว การห่อไว้ใน promise ทำให้จุดที่เรียกอ่านเหมือน `await` ธรรมดา
 
 ## ชั้น request/reply เล็ก ๆ แบบสด ๆ
 
-เดโมด้านล่างทำ `request()` บน echo socket ภายในหน้า แต่ละครั้งที่เรียกจะสร้าง `id` ใหม่ เก็บ resolver ไว้ใน map `pending` แล้วส่ง request เมื่อ reply กลับมา `id` ที่สะท้อนกลับของมันจะหา resolver ที่ถูกต้องเจอ request สองอันถูกส่งออกไป echo หน่วงเวลาต่างกันเพื่อให้ **reply มาถึงผิดลำดับ** — และ correlation ยังคงจับคู่แต่ละอันได้อย่างถูกต้อง มันใช้ `WebSocket` API จริง
+เดโมด้านล่างทำ `request()` บน echo socket ภายในหน้า แต่ละครั้งที่เรียกจะสร้าง `id` ใหม่ เก็บ resolver ไว้ใน map `pending` แล้วส่ง request เมื่อ reply กลับมา `id` ที่สะท้อนกลับของตัวเองจะหา resolver ที่ถูกต้องเจอ request สองอันถูกส่งออกไป echo หน่วงเวลาต่างกันเพื่อให้ **reply มาถึงผิดลำดับ** — และ correlation ยังคงจับคู่แต่ละอันได้อย่างถูกต้อง เดโมนี้ใช้ `WebSocket` API จริง
 
 export const reqReplyCode = `(function () {
   // In-page echo socket with the real WebSocket API. It replies to a 'getUser' request,
@@ -125,7 +125,7 @@ export const reqReplyCode = `(function () {
 | HTTP สำหรับ request/response | query ครั้งเดียว, cacheable | latency สูงกว่า WS |
 | Fire-and-forget (ไม่มี reply) | log, metric push | ไม่รู้ว่า server ได้รับหรือไม่ |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ไม่มี Timeout สำหรับ Pending Request**
 อาการ:
@@ -139,7 +139,7 @@ export const reqReplyCode = `(function () {
 - memory leak และ stale handler ทำงานเมื่อ reconnect
 - ใน `onclose`: reject + clear pending map ทั้งหมด
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Pusher Channels:**
 > - ส่ง subscription request ด้วย `channel_id`
@@ -150,7 +150,7 @@ export const reqReplyCode = `(function () {
 > - client track ref เพื่อ match response กับ request ที่ส่งไป
 
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">
-WebSocket ไม่มี request/response ในตัว — reply และ push ใช้สตรีมเดียวร่วมกันและมาถึงผิดลำดับได้ ใส่ **`id`** ที่ไม่ซ้ำบนแต่ละ request ให้ server **สะท้อนมันกลับ** บน reply และเก็บ map *id → ผู้รอ* เพื่อให้ทุกคำตอบหาคำถามที่ถามมันได้
+WebSocket ไม่มี request/response ในตัว — reply และ push ใช้สตรีมเดียวร่วมกันและมาถึงผิดลำดับได้ ใส่ **`id`** ที่ไม่ซ้ำบนแต่ละ request ให้ server **สะท้อน id นั้นกลับ** บน reply และเก็บ map *id → ผู้รอ* เพื่อให้ทุกคำตอบกลับไปหาคำถามของตัวเองได้ถูก
 </Callout>
 
 export const quizReqReply = [
@@ -165,10 +165,10 @@ export const quizReqReply = [
     answer: 1,
   },
   {
-    q: 'แพตเทิร์น correlation-id จับคู่ reply กับ request ของมันอย่างไร?',
+    q: 'แพตเทิร์น correlation-id จับคู่ reply กับ request ของตัวเองอย่างไร?',
     options: [
       'client สมมติว่า reply แรกตอบ request แรก',
-      'แต่ละ request พก id ที่ไม่ซ้ำซึ่ง server สะท้อนกลับบน reply client ค้นหามันใน map pending',
+      'แต่ละ request พก id ที่ไม่ซ้ำซึ่ง server สะท้อนกลับบน reply client ค้นหา id นั้นใน map pending',
       'server เรียงลำดับ reply ตามตัวอักษร',
       'WebSocket URL เปลี่ยนต่อแต่ละ request',
     ],

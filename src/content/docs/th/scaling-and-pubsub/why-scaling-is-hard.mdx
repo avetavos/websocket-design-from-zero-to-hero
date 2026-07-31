@@ -11,7 +11,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-การ scale stateless HTTP เป็นปัญหาที่แก้ได้แล้วและแทบจะน่าเบื่อ: request เป็นอิสระต่อกัน ดังนั้นคุณแค่วาง server ที่เหมือนกันเพิ่มไว้หลัง load balancer ก็เสร็จ WebSocket ทำลายภาพที่สบายใจนั้นด้วยวิธีเฉพาะเจาะจงสี่แบบ บทเรียนนี้ตั้งชื่อให้แต่ละแบบ เพราะคุณไม่สามารถออกแบบเพื่อเลี่ยงปัญหาที่คุณเพียงแค่รู้สึกถึงมันอย่างคลุมเครือได้
+การ scale stateless HTTP เป็นปัญหาที่แก้ได้แล้วและแทบจะน่าเบื่อ: request เป็นอิสระต่อกัน ดังนั้นคุณแค่วาง server ที่เหมือนกันเพิ่มไว้หลัง load balancer ก็เสร็จ WebSocket ทำลายภาพที่สบายใจนั้นด้วยวิธีเฉพาะเจาะจงสี่แบบ บทเรียนนี้ตั้งชื่อให้ทั้งสี่แบบ เพราะคุณออกแบบเลี่ยงปัญหาที่รู้สึกได้แค่คลุมเครือไม่ได้
 
 ## 1. connection state อยู่ใน memory
 
@@ -37,11 +37,11 @@ interface Conn {
 const connections = new Map<string, Conn>();
 ```
 
-map ด้านบนคือหัวใจของทั้งโมดูล มันเป็นที่เดียวที่ instance นี้รู้ว่าใครเชื่อมต่ออยู่ — และไม่มี instance อื่นอ่านมันได้
+map ด้านบนคือหัวใจของทั้งโมดูล เป็นที่เดียวที่ instance นี้รู้ว่าใครเชื่อมต่ออยู่ — และไม่มี instance อื่นอ่านได้เลย
 
 ## 2. CPU และ memory มีพื้นต่อ connection
 
-connection HTTP ที่ idle แทบไม่มีต้นทุนเลยเพราะมันแทบไม่มีตัวตนระหว่าง request ส่วน WebSocket ที่ idle นั้นต่างออกไป: แต่ละตัว*เปิดอยู่*จริง ๆ กิน memory ส่วนหนึ่งและ file descriptor หนึ่งตัวไม่ว่ามันจะส่งอะไรอยู่หรือไม่
+connection HTTP ที่ idle แทบไม่มีต้นทุนเลยเพราะแทบไม่มีตัวตนระหว่าง request ส่วน WebSocket ที่ idle ต่างออกไป: แต่ละตัว*เปิดอยู่*จริง ๆ กิน memory ก้อนหนึ่งและ file descriptor หนึ่งตัว ไม่ว่าจะกำลังส่งอะไรอยู่หรือไม่
 
 - **Memory** kernel socket buffer บวกกับ record ต่อ connection ของคุณรวมกันแล้วก็มากขึ้น ไม่กี่กิโลไบต์ต่อตัวฟังดูเล็กน้อย จนกว่าคุณจะนึกได้ว่า 50,000 connection หมายถึงหลายร้อยเมกะไบต์ก่อนที่แอปของคุณจะทำงานอะไรเลย
 - **File descriptor** ทุก socket คือ descriptor และ limit ของ OS (`ulimit -n`) มักเป็นค่าเริ่มต้นที่ต่ำอย่าง 1024 พอชนเพดานแล้ว connection ใหม่ก็เปิดไม่ได้โดยไม่มี application bug ที่ชัดเจน
@@ -51,12 +51,12 @@ connection HTTP ที่ idle แทบไม่มีต้นทุนเล�
 
 ## 3. connection ที่มีอายุยืน balance ได้แย่
 
-load balancer กระจาย connection *ใหม่* ไปยัง instance ต่าง ๆ แต่ WebSocket มีอายุยืน ดังนั้นเมื่อ client มาลงที่ instance หนึ่ง มันมักจะอยู่ที่นั่นเป็นนาทีหรือเป็นชั่วโมง
+load balancer กระจาย connection *ใหม่* ไปยัง instance ต่าง ๆ แต่ WebSocket มีอายุยืน พอ client มาลงที่ instance ไหน ก็มักจะอยู่ที่นั่นยาวเป็นนาทีหรือเป็นชั่วโมง
 
 สิ่งนี้มีผลพลอยได้ที่น่าอึดอัดสองอย่าง:
 
-- **load สะท้อนอดีต ไม่ใช่ปัจจุบัน** ถ้า instance A ออนไลน์ระหว่าง traffic พุ่ง มันอาจถือ connection ไว้มากกว่า instance B ที่เริ่มทีหลังมาก — และ balancer ไม่สามารถ rebalance socket ที่ใช้งานอยู่ได้โดยไม่ตัดผู้คนออก
-- **การ deploy สร้างความปั่นป่วน** การ restart instance ตัดทุก connection ที่มันถือไว้ client ทั้งหมดเหล่านั้น reconnect พร้อมกันและ balancer ก็ผลักพวกเขาไปยัง instance ที่เหลืออยู่ สร้าง stampede ขึ้น (มีรายละเอียดเพิ่มในบทเรียน presence)
+- **load สะท้อนอดีต ไม่ใช่ปัจจุบัน** ถ้า instance A ออนไลน์ระหว่าง traffic พุ่ง ก็อาจถือ connection ไว้มากกว่า instance B ที่เริ่มทีหลังมาก — และ balancer ไม่สามารถ rebalance socket ที่ใช้งานอยู่ได้โดยไม่ตัดผู้คนออก
+- **การ deploy สร้างความปั่นป่วน** การ restart instance ตัดทุก connection ที่ถืออยู่ทิ้ง client ชุดนั้นก็ reconnect พร้อมกัน แล้ว balancer ก็ผลักไปยัง instance ที่เหลือ เกิดเป็น stampede (มีรายละเอียดเพิ่มในบทเรียน presence)
 
 <Mermaid title="การ restart ตัด connection ที่ใช้งานอยู่ ทั้งหมด reconnect พร้อมกัน" code={rebalanceDiagram} />
 
@@ -76,7 +76,7 @@ export const rebalanceDiagram = `flowchart TB
 
 > broadcast บน instance A iterate ผ่าน `A.connections` ส่วน client ที่เชื่อมต่อกับ instance B อยู่ใน `B.connections` ซึ่ง A อ่านไม่ได้ ดังนั้น broadcast จึง**ไม่สามารถ**ไปถึง client นั้นได้ — ไม่ใช่ช้า ไม่ใช่ไม่น่าเชื่อถือ แต่ไม่มีวันเลย เพราะไม่มีเส้นทางcodeใดอยู่ระหว่าง heap ทั้งสอง
 
-นี่ไม่ใช่ bug ที่จะแก้ด้วย retry หรือ buffer ที่ใหญ่ขึ้น มันเป็นข้อเท็จจริงเชิงโครงสร้าง: process สองตัวไม่แชร์ memory กัน ทางแก้เดียวคือการเพิ่ม *channel ระหว่าง instance* เพื่อให้ข้อความที่ publish ที่ใดก็ตามถูกส่งไปทุกที่ — ซึ่งก็คือ backplane ในบทเรียนถัดไปนั่นเอง
+นี่ไม่ใช่ bug ที่แก้ได้ด้วย retry หรือ buffer ที่ใหญ่ขึ้น แต่เป็นข้อเท็จจริงเชิงโครงสร้าง: process สองตัวไม่แชร์ memory กัน ทางแก้เดียวคือเพิ่ม *channel ระหว่าง instance* เพื่อให้ message ที่ publish ที่ไหนก็ตามไปถึงทุกที่ — ซึ่งก็คือ backplane ในบทเรียนถัดไปนั่นเอง
 
 | Challenge | WebSocket | HTTP REST |
 |---|---|---|
@@ -85,7 +85,7 @@ export const rebalanceDiagram = `flowchart TB
 | Load balance | ยาก — connection อายุยืน | ง่าย — round-robin |
 | Scale limit | จำนวน connection (fd, memory) | RPS (CPU, bandwidth) |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ใช้ Single Instance สำหรับ Production WebSocket Server**
 อาการ:
@@ -99,7 +99,7 @@ export const rebalanceDiagram = `flowchart TB
 - user บน instance B ไม่ได้รับ message จาก instance A
 - ใช้ pub/sub backplane (Redis, NATS) ให้ทุก instance subscriber ฟัง channel เดียวกัน
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Discord:**
 > - แต่ละ Gateway server รองรับ connection นับแสน
@@ -110,7 +110,7 @@ export const rebalanceDiagram = `flowchart TB
 > - backplane distributed ข้าม data center ทั่วโลก
 
 <Callout title="สี่ปัญหา หนึ่งราก">
-connection state ใน memory, พื้นทรัพยากรต่อ connection, load ที่ติดอยู่กับ connection อายุยืน และ client ที่เข้าไม่ถึงบน instance อื่น ทั้งหมดสืบย้อนกลับไปยังรากเดียวกัน: แต่ละ connection — และความรู้เกี่ยวกับมัน — อยู่ภายใน process เดียว ทุกเทคนิคการ scaling ในโมดูลนี้คือวิธีหลีกเลี่ยงปัญหานั้น
+connection state ใน memory, พื้นทรัพยากรต่อ connection, load ที่ติดอยู่กับ connection อายุยืน และ client ที่เข้าไม่ถึงบน instance อื่น ทั้งหมดสืบย้อนกลับไปที่รากเดียวกัน: ตัว connection — และความรู้ทั้งหมดเกี่ยวกับ connection นั้น — อยู่ภายใน process เดียว ทุกเทคนิคการ scaling ในโมดูลนี้คือวิธีเลี่ยงข้อจำกัดข้อนั้น
 </Callout>
 
 export const quizHard = [
@@ -118,7 +118,7 @@ export const quizHard = [
     q: 'ทำไม WebSocket server จึงมักจะที่ไม่พอก่อนที่ CPU จะดูยุ่ง?',
     options: [
       'เพราะการเข้ารหัส TLS ใช้ CPU หนักมาก',
-      'เพราะแต่ละ connection ที่เปิดอยู่กิน memory และ file descriptor แม้ในขณะที่ idle',
+      'เพราะแต่ละ connection ที่เปิดอยู่กิน memory และ file descriptor แม้ตอนที่ idle อยู่',
       'เพราะ load balancer จำกัด throttle traffic ของ WebSocket',
       'เพราะ Node.js ใช้ได้มากกว่าหนึ่ง core ไม่ได้',
     ],
@@ -128,7 +128,7 @@ export const quizHard = [
     q: 'ทำไม load ที่ใช้งานอยู่จึงมักไม่สม่ำเสมอข้าม WebSocket instance?',
     options: [
       'load balancer ส่งทุกอย่างไปยัง instance แรกเสมอ',
-      'connection ที่มีอายุยืนอยู่ที่ที่มันมาลง ดังนั้น load จึงสะท้อน traffic ในอดีต ไม่ใช่ปัจจุบัน',
+      'connection ที่มีอายุยืนจะค้างอยู่ที่ instance เดิมที่มาลง load จึงสะท้อน traffic ในอดีต ไม่ใช่ปัจจุบัน',
       'instance ที่ใหม่กว่าปฏิเสธ connection',
       'WebSocket ย้ายระหว่าง server แบบสุ่ม',
     ],

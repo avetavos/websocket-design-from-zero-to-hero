@@ -11,30 +11,30 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-ในบทเรียนที่แล้วเราบอกว่าการไถลเงียบ ๆ จาก *live* ไปสู่ *dropped* คือ transition ที่แอปลืม บทเรียนนี้อธิบายว่า **ทำไมมันถึงเงียบ** — และมอบเครื่องมือหนึ่งเดียวที่ทำลายความเงียบนั้น: heartbeat
+ในบทเรียนที่แล้วเราบอกว่าการไถลเงียบ ๆ จาก *live* ไปสู่ *dropped* คือ transition ที่แอปลืม บทเรียนนี้อธิบายว่า **ทำไมถึงเงียบ** — และมอบเครื่องมือหนึ่งเดียวที่ทำลายความเงียบนั้น: heartbeat
 
 ## Connection ที่เงียบและ connection ที่ตายดูเหมือนกัน
 
-นี่คือความจริงที่อึดอัดเกี่ยวกับ socket ที่เปิดอยู่: **การไม่ทำอะไรเลยดูเหมือนการพังเป๊ะ ๆ** ถ้าไม่มีฝ่ายใดส่งข้อความเลยเป็นเวลาสามสิบวินาที จะมีคำอธิบายที่เป็นไปได้สองอย่าง และจากภายในแล้วมันแยกแยะกันไม่ออก:
+นี่คือความจริงที่อึดอัดเกี่ยวกับ socket ที่เปิดอยู่: **การไม่ทำอะไรเลยหน้าตาเหมือนการพังเป๊ะ ๆ** ถ้าไม่มีฝ่ายไหนส่ง message เลยเป็นเวลาสามสิบวินาที คำอธิบายที่เป็นไปได้มีสองอย่าง และมองจากข้างในแล้วแยกไม่ออกเลย:
 
 - ทุกอย่างปกติดี และก็แค่ไม่มีใครมีอะไรจะพูด
-- Connection ตายไปเมื่อสิบวินาทีที่แล้ว — Wi-Fi handoff แลปท็อปที่หลับ load balancer ที่กำจัด stream ที่ idle ทิ้ง — และ packet ที่ประกาศการตายของมันไม่เคยมาถึง
+- Connection ตายไปเมื่อสิบวินาทีที่แล้ว — Wi-Fi handoff แลปท็อปที่หลับ load balancer ที่เก็บกวาด stream ที่ idle ทิ้ง — แล้ว packet ที่ประกาศการตายก็ไม่เคยมาถึง
 
-TCP เองก็ช่วยคุณไม่ได้ตรงนี้ TCP รู้ว่า connection พังก็ต่อเมื่อมันพยายามส่งแล้ว acknowledgement ไม่เคยกลับมา ถ้าแอปของคุณ *idle* TCP ก็ idle ด้วย ดังนั้นมันจึงไม่เคยพยายามส่ง จึงไม่เคยรู้ TCP keepalive ที่ติดมากับ operating system อาจใช้เวลาเป็น **ชั่วโมง** กว่าจะทำงานตามค่าเริ่มต้น — ไร้ประโยชน์สำหรับแอป real-time ผลก็คือ: object `WebSocket` ของคุณรายงานอย่างมีความสุขว่า `readyState === 1` (OPEN) บน connection ที่กลายเป็นซากปรักหักพังมาหลายนาทีแล้ว
+TCP เองก็ช่วยตรงนี้ไม่ได้ TCP จะรู้ว่า connection พังก็ต่อเมื่อลองส่งแล้ว acknowledgement ไม่กลับมา ถ้าแอปของคุณ *idle* TCP ก็ idle ตาม จึงไม่เคยลองส่ง และไม่เคยรู้ ส่วน TCP keepalive ที่ติดมากับ operating system ค่าเริ่มต้นอาจใช้เวลาเป็น **ชั่วโมง** กว่าจะทำงาน — ไร้ประโยชน์สำหรับแอป real-time ผลลัพธ์คือ object `WebSocket` ของคุณรายงานอย่างมีความสุขว่า `readyState === 1` (OPEN) บน connection ที่กลายเป็นซากมาหลายนาทีแล้ว
 
-ทางรักษาเดียวคือ **สร้าง traffic อย่างจงใจ** ในช่วงเวลาที่รู้ และตรวจสอบว่ามันกลับมา นั่นคือ heartbeat
+ทางรักษาเดียวคือ **จงใจสร้าง traffic** ตามช่วงเวลาที่กำหนด แล้วตรวจว่าคำตอบกลับมาไหม นั่นคือ heartbeat
 
 ## Heartbeat สองชนิด
 
 มีกลไกที่แตกต่างกันสองอย่าง และผู้คนสับสนระหว่างสองอย่างนี้อยู่เสมอ
 
-- **Protocol ping/pong frame** WebSocket protocol นิยาม control frame พิเศษไว้: *ping* frame และ *pong* frame ตามสเปก เมื่อ endpoint รับ ping มันต้องตอบด้วย pong สิ่งเหล่านี้อยู่ใต้ message handler ของคุณ — มันเป็นส่วนหนึ่งของ framing layer ที่ครอบคลุมในโมดูล foundations
+- **Protocol ping/pong frame** WebSocket protocol นิยาม control frame พิเศษไว้: *ping* frame และ *pong* frame ตาม spec แล้ว endpoint ที่รับ ping ต้องตอบด้วย pong เสมอ frame พวกนี้อยู่ต่ำกว่าระดับ message handler ของคุณ — เป็นส่วนหนึ่งของ framing layer ที่พูดถึงในโมดูล foundations
 - **Application-level heartbeat** ข้อความธรรมดาที่codeของคุณส่งและตอบ เช่น JSON `{"type":"ping"}` ที่ server ของคุณตอบกลับด้วย `{"type":"pong"}`
 
-ทำไมถึงต้องสร้างเวอร์ชัน app-level ในเมื่อ protocol ให้ ping/pong มาฟรี ๆ อยู่แล้ว? เพราะ **เบราว์เซอร์ไม่อนุญาตให้คุณใช้ protocol frame เหล่านั้น** `WebSocket` API ของเบราว์เซอร์ไม่มี method `ping()` และไม่ยิง event ใดเมื่อ ping หรือ pong มาถึง — มันถูกจัดการอย่างมองไม่เห็นภายในเบราว์เซอร์ *server* ที่เป็นเบราว์เซอร์สามารถส่ง protocol ping ไปยังเบราว์เซอร์ได้ แต่code *client* ที่เป็นเบราว์เซอร์ไม่สามารถส่งหรือสังเกตมันได้ ดังนั้นในทางปฏิบัติ:
+ทำไมถึงต้องสร้างเวอร์ชัน app-level ในเมื่อ protocol ให้ ping/pong มาฟรี ๆ อยู่แล้ว? เพราะ **เบราว์เซอร์ไม่อนุญาตให้คุณใช้ protocol frame เหล่านั้น** `WebSocket` API ของเบราว์เซอร์ไม่มี method `ping()` และไม่ยิง event ใดเลยเมื่อ ping หรือ pong มาถึง — ทุกอย่างถูกจัดการอย่างมองไม่เห็นอยู่ภายในเบราว์เซอร์ ฝั่ง server ส่ง protocol ping ไปยังเบราว์เซอร์ได้ แต่ code ฝั่ง *client* ในเบราว์เซอร์ทั้งส่งและสังเกตไม่ได้เลย ดังนั้นในทางปฏิบัติ:
 
 - **Server ไปยังเบราว์เซอร์:** server อาจใช้ protocol ping/pong จริงเพื่อตรวจสอบเบราว์เซอร์
-- **เบราว์เซอร์ไปยัง server:** client ต้องใช้ข้อความ app-level เพราะนั่นคือทั้งหมดที่มันมองเห็น
+- **เบราว์เซอร์ไปยัง server:** client ต้องใช้ message ระดับ app เพราะเห็นได้แค่นั้น
 
 ดังนั้นระบบ production ส่วนใหญ่จึงรัน heartbeat แบบ **app-level** เพื่อให้ logic เดียวกันทำงานได้บนทุกแพลตฟอร์ม นั่นคือสิ่งที่เราจะสร้างด้านล่าง
 
@@ -53,7 +53,7 @@ export const heartbeatDiagram = `sequenceDiagram
     Note over C: pong seen — mark connection healthy
   end`;
 
-ในcode มันคือ interval timer บวกกับ state ชิ้นเล็ก ๆ: ส่ง ping ทุก N วินาที และจำว่า pong ที่ตรงกันกลับมาหรือยัง นี่คือหัวใจของมันในรูปแบบ TypeScript ธรรมดา:
+ใน code ก็แค่ interval timer บวก state ชิ้นเล็ก ๆ: ส่ง ping ทุก N วินาที แล้วจำว่า pong ที่คู่กันกลับมาหรือยัง นี่คือหัวใจของตัวเองในรูป TypeScript ธรรมดา:
 
 ```ts
 const HEARTBEAT_MS = 5000;
@@ -79,7 +79,7 @@ function startHeartbeat(ws: WebSocket) {
 
 ## ping/pong แบบสด
 
-เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง mock เล่นบทเป็น server ที่ประพฤติดี: ทุกครั้งที่มันรับข้อความ `ping` แบบ app-level มันจะตอบด้วย `pong` client ส่ง ping ทุกหนึ่งวินาทีและ log การไปกลับ ดู heartbeat ลงตัวเข้าสู่จังหวะของมัน
+เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง mock เล่นบทเป็น server ที่ประพฤติดี: ทุกครั้งที่รับ message `ping` ระดับ app ก็จะตอบ `pong` กลับ ส่วน client ส่ง ping ทุกหนึ่งวินาทีแล้ว log การไปกลับ ลองดู heartbeat เข้าจังหวะของตัวเอง
 
 export const pingPongCode = `(function () {
   // In-page socket with the real WebSocket API. The mock acts as a healthy
@@ -126,7 +126,7 @@ export const pingPongCode = `(function () {
 
 <NodeRunner client:visible code={pingPongCode} />
 
-คุณจะเห็น ping ออกไปและ pong กลับมา หนึ่งคู่ต่อวินาที ทุก pong ที่กลับมาคือหลักฐานชัดเจนว่า connection ยังมีชีวิต *ในขณะนั้น* — ไม่ใช่เมื่อสามสิบวินาทีที่แล้ว ไม่ใช่ "น่าจะ" นั่นคือจุดประสงค์ทั้งหมดของ heartbeat: มันเปลี่ยนความเงียบ ซึ่งไม่บอกอะไรคุณเลย ให้กลายเป็นสัญญาณที่สม่ำเสมอซึ่งคุณเชื่อถือได้จริง
+คุณจะเห็น ping ออกไปและ pong กลับมา หนึ่งคู่ต่อวินาที ทุก pong ที่กลับมาคือหลักฐานชัดเจนว่า connection ยังมีชีวิต *ในขณะนั้น* — ไม่ใช่เมื่อสามสิบวินาทีที่แล้ว ไม่ใช่ "น่าจะ" นั่นคือจุดประสงค์ทั้งหมดของ heartbeat: เปลี่ยนความเงียบซึ่งไม่บอกอะไรเลย ให้เป็นสัญญาณสม่ำเสมอที่เชื่อถือได้จริง
 
 | Heartbeat Type | ทำงานอย่างไร | ข้อดี |
 |---|---|---|
@@ -134,7 +134,7 @@ export const pingPongCode = `(function () {
 | Application-level Ping | ส่ง JSON `{ "type": "ping" }` | flexible, บน binary หรือ text frame |
 | Keepalive TCP | OS-level TCP keepalive | ไม่ต้องใช้ application code |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ไม่มี Heartbeat เลย**
 อาการ:
@@ -148,7 +148,7 @@ export const pingPongCode = `(function () {
 - battery drain บน mobile device
 - interval 30-60 วินาทีเหมาะสำหรับส่วนใหญ่ — ขึ้นกับ firewall timeout
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Discord Gateway:**
 > - ส่ง `{ "op": 1, "d": null }` (Heartbeat opcode) ตาม interval ที่ server กำหนด

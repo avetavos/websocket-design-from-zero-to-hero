@@ -11,7 +11,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-WebSocket เป็นออบเจกต์ที่ขับเคลื่อนด้วย event codeของคุณไม่ต้องคอย poll หรือบล็อกรอมัน แต่คุณผูก handler ไว้แล้วปล่อยให้การเชื่อมต่อเรียกกลับมาหาคุณเมื่อมีอะไรเกิดขึ้น มี event อยู่ **สี่** ตัวพอดี และฟิลด์เดียว — `readyState` — ที่บอกเสมอว่าคุณอยู่ตรงไหน เชี่ยวชาญสิ่งเหล่านี้แล้ว API จะไม่มีอะไรเซอร์ไพรส์อีก
+WebSocket เป็นออบเจกต์ที่ขับเคลื่อนด้วย event code ของคุณไม่ต้องคอย poll หรือบล็อกรอ แต่คุณผูก handler ไว้แล้วปล่อยให้การเชื่อมต่อเรียกกลับมาหาคุณเมื่อมีอะไรเกิดขึ้น มี event อยู่ **สี่** ตัวพอดี และฟิลด์เดียว — `readyState` — ที่บอกเสมอว่าคุณอยู่ตรงไหน เชี่ยวชาญสิ่งเหล่านี้แล้ว API จะไม่มีอะไรเซอร์ไพรส์อีก
 
 ## สี่ event
 
@@ -20,7 +20,7 @@ WebSocket บนเบราว์เซอร์ทุกตัวยิง eve
 - **`open`** — handshake สำเร็จ การเชื่อมต่อตอนนี้เป็น `OPEN` และพร้อมใช้งานแล้ว นี่คือที่เดียวที่ปลอดภัยในการเริ่มส่ง
 - **`message`** — มีข้อความมาถึงจาก peer payload อยู่บน `event.data`
 - **`close`** — การเชื่อมต่อปิดลงแล้ว event นี้พกตัวเลข `event.code` และสตริง `event.reason` ที่อธิบายว่าทำไม
-- **`error`** — มีบางอย่างผิดพลาด มันเป็นแค่ข้อมูลบอกกล่าวและจงใจให้คลุมเครือ (เพื่อความปลอดภัย) event `close` มักจะตามมาเสมอ
+- **`error`** — มีบางอย่างผิดพลาด เป็นแค่ข้อมูลบอกกล่าวและจงใจให้คลุมเครือ (เพื่อความปลอดภัย) event `close` มักจะตามมาเสมอ
 
 คุณผูก handler ได้สองวิธี วิธีที่เร็วที่สุดคือผ่าน property `on*`:
 
@@ -40,7 +40,7 @@ ws.addEventListener('message', (event) => console.log(event.data));
 
 ## readyState: ตัวเลขทั้งสี่
 
-ขณะที่ event บอกคุณว่าสิ่งต่าง ๆ เปลี่ยน *เมื่อไหร่* `readyState` บอกคุณว่าสถานะปัจจุบันคืออะไร *ในทุกขณะ* มันเป็นตัวเลข และคลาสเปิดให้เข้าถึงค่าคงที่ที่มีชื่อสำหรับแต่ละค่า:
+ขณะที่ event บอกคุณว่าสิ่งต่าง ๆ เปลี่ยน *เมื่อไหร่* `readyState` บอกคุณว่าสถานะปัจจุบันคืออะไร *ในทุกขณะ* เป็นตัวเลข และคลาสเปิดให้เข้าถึงค่าคงที่ที่มีชื่อสำหรับแต่ละค่า:
 
 ```ts
 WebSocket.CONNECTING; // 0 — handshake in progress
@@ -71,11 +71,11 @@ export const eventsDiagram = `stateDiagram-v2
   note right of OPEN: message events may fire repeatedly here
   CLOSED --> [*]`;
 
-event `message` พิเศษตรงที่: มันไม่ใช่การเปลี่ยนสถานะ มันยิงได้กี่ครั้งก็ได้ขณะที่คุณนั่งอยู่ใน `OPEN` ซึ่งนั่นแหละคือจุดประสงค์ทั้งหมดของการเชื่อมต่อแบบคงอยู่ยาวนาน
+event `message` พิเศษตรงที่: ไม่ใช่การเปลี่ยนสถานะ event นี้ยิงได้กี่ครั้งก็ได้ขณะที่คุณอยู่ในสถานะ `OPEN` ซึ่งนั่นแหละคือจุดประสงค์ทั้งหมดของการเชื่อมต่อแบบคงอยู่ยาวนาน
 
 ## ดูการเปลี่ยนสถานะแบบสด
 
-เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server มันล็อก `readyState` ในทุกขั้นตอนโดยใช้ค่าคงที่ที่มีชื่อ ในแอปจริงมีเพียงบรรทัดแรก — `new WebSocket('wss://your-server')` — เท่านั้นที่ต่างไป
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server เดโมล็อก `readyState` ในทุกขั้นตอนโดยใช้ค่าคงที่ที่มีชื่อ ในแอปจริงมีเพียงบรรทัดแรก — `new WebSocket('wss://your-server')` — เท่านั้นที่ต่างไป
 
 export const stateEchoCode = `(function () {
   // In-page echo socket with the same API as a real WebSocket.
@@ -124,7 +124,7 @@ export const stateEchoCode = `(function () {
 | CLOSING | 2 | กำลังปิด connection |
 | CLOSED | 3 | ปิดแล้ว |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ส่ง Message เมื่อ readyState ไม่ใช่ OPEN**
 อาการ:
@@ -138,7 +138,7 @@ export const stateEchoCode = `(function () {
 - `onerror` เกิดก่อน `onclose` เสมอเมื่อมี error
 - log ใน `onerror` เพื่อรู้สาเหตุ, reconnect ใน `onclose`
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **GitHub Codespaces Terminal:**
 > - ตรวจ readyState ก่อนส่ง input ทุก keystroke
@@ -149,7 +149,7 @@ export const stateEchoCode = `(function () {
 > - user รู้ว่า connection ขาดและกำลัง reconnect
 
 <Callout title="สองมุมมอง ความจริงเดียว">
-สี่ event บอกคุณว่าการเชื่อมต่อเปลี่ยน *เมื่อไหร่*; `readyState` (0/1/2/3 หรือค่าคงที่ที่มีชื่อ) บอกคุณว่ามันอยู่ *ตรงไหน* ตอนนี้ ใส่ guard ให้การส่งของคุณด้วย `readyState === WebSocket.OPEN` และอ่าน `code` กับ `reason` จาก event `close` เพื่อรู้ว่าทำไมมันจึงจบลง
+สี่ event บอกคุณว่าการเชื่อมต่อเปลี่ยน *เมื่อไหร่*; `readyState` (0/1/2/3 หรือค่าคงที่ที่มีชื่อ) บอกคุณว่าอยู่ *ตรงไหน* ตอนนี้ ใส่ guard ให้การส่งของคุณด้วย `readyState === WebSocket.OPEN` และอ่าน `code` กับ `reason` จาก event `close` เพื่อรู้ว่าทำไมการเชื่อมต่อจึงจบลง
 </Callout>
 
 export const quizEvents = [

@@ -19,7 +19,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 flow นี้มีการเคลื่อนไหวเพียงสองท่า และการทำให้ลำดับถูกต้องคือเคล็ดลับทั้งหมด:
 
-1. **publish อย่า send** เมื่อ client ส่งข้อความ instance จะ*ไม่* loop ผ่าน socket ภายในก่อน มันจะ **publish** ข้อความไปยัง channel ที่แชร์กันบน bus
+1. **publish อย่า send** เมื่อ client ส่ง message เข้ามา instance จะ*ไม่* loop ผ่าน socket ภายในก่อน แต่จะ **publish** message นั้นไปยัง channel ที่แชร์กันบน bus
 2. **subscribe และ fan-out** ทุก instance — รวมถึงตัวที่ publish — จะ **subscribe** channel นั้นไว้ เมื่อ bus ส่งข้อความมา แต่ละ instance จะ loop ผ่าน client ภายใน*ของตัวเอง*แล้วส่ง
 
 instance ที่ publish ปฏิบัติต่อตัวเองเหมือน subscriber อื่น ๆ ไม่มี branch พิเศษว่า "และส่งภายในด้วย" การส่งภายในเกิดขึ้นเพราะ publisher เป็น subscriber ด้วยเช่นกัน เส้นทางcodeเดียว ไปถึง client ทุกตัว
@@ -62,21 +62,21 @@ bus.subscribe(channel, (raw: string) => {
 });
 ```
 
-สังเกตว่า `onClientMessage` ไม่เคยแตะ `connections` เลย มันไม่สามารถส่งซ้ำซ้อนโดยบังเอิญหรือพลาด remote client ได้ เพราะมันไม่ได้ส่งเลย — มันแค่ publish การส่งทั้งหมดเป็นงานของ subscriber และทุก instance รัน subscriber ตัวเดียวกัน
+สังเกตว่า `onClientMessage` ไม่เคยแตะ `connections` เลย จึงส่งซ้ำซ้อนโดยบังเอิญหรือพลาด remote client ไม่ได้ เพราะไม่ได้ส่งเองตั้งแต่แรก — แค่ publish เท่านั้น การส่งทั้งหมดเป็นงานของ subscriber และทุก instance รัน subscriber ตัวเดียวกัน
 
 ## bus ไหนดี? Redis, NATS, หรือ Kafka
 
-ทั้งสามตัวขนส่งข้อความระหว่าง instance ได้ ความแตกต่างอยู่ที่ guarantee ที่มันเพิ่มให้
+ทั้งสามตัวขนส่ง message ระหว่าง instance ได้หมด ต่างกันที่ guarantee ที่แต่ละตัวเพิ่มให้
 
-- **Redis pub/sub** — ค่าเริ่มต้นที่พบบ่อย เรียบง่ายสุด ๆ latency ต่ำมาก แบบ *fire-and-forget*: ถ้า instance ไม่ได้ subscribe อยู่ในขณะที่ข้อความถูก publish มันจะไม่มีวันเห็นข้อความนั้นเลย เหมาะอย่างยิ่งสำหรับ live chat และ presence ที่การพลาดข้อความระหว่างทางไม่ใช่เรื่องร้ายแรง
+- **Redis pub/sub** — ค่าเริ่มต้นที่พบบ่อย เรียบง่ายสุด ๆ latency ต่ำมาก แบบ *fire-and-forget*: ถ้า instance ไม่ได้ subscribe อยู่ตอนที่ message ถูก publish ก็จะไม่มีวันเห็น message นั้นเลย เหมาะมากกับ live chat และ presence ที่พลาด message ระหว่างทางไปบ้างก็ไม่ใช่เรื่องร้ายแรง
 - **NATS** — messaging น้ำหนักเบาที่สร้างมาเพื่อจุดประสงค์นี้ มีแกน fire-and-forget คล้ายกัน พร้อม persistence ที่เป็น option (JetStream) เมื่อคุณต้องการ replay
-- **Kafka** — log ที่ durable, มีลำดับ, และ replay ได้ รันหนักกว่า แต่ข้อความถูกเก็บไว้ ดังนั้น instance ที่กำลัง restart สามารถตามทันสิ่งที่มันพลาดไปได้ เลือกใช้มันเมื่อ event เหล่านั้นต้องถูกจัดเก็บ ตรวจสอบ หรือถูก consume โดยระบบอื่นด้วย
+- **Kafka** — log ที่ durable, มีลำดับ, และ replay ได้ รันหนักกว่า แต่ message ถูกเก็บไว้ instance ที่เพิ่ง restart จึงตามเก็บส่วนที่พลาดไปได้ เลือกใช้เมื่อ event เหล่านั้นต้องถูกจัดเก็บ ตรวจสอบ หรือให้ระบบอื่น consume ต่อด้วย
 
 สำหรับ real-time fan-out ล้วน ๆ Redis pub/sub มักเป็นตัวเลือกแรกที่ถูกต้อง คุณค่อยขยับไปใช้ NATS หรือ Kafka เมื่อคุณต้องการ persistence, ลำดับ, หรือ replay
 
 ## ดูสอง instance แชร์ bus เดียวกัน
 
-demo ด้านล่างจำลองทั้งรูปแบบใน browser ของคุณ: in-memory bus ที่แชร์กันหนึ่งตัวและ server instance สองตัว แต่ละตัวถือ client ภายในของตัวเอง ดูลำดับใน log — ข้อความถูก publish ครั้งเดียว จากนั้นทั้งสอง instance fan-out และ client บน instance *อื่น* ก็ได้รับมัน นั่นคือช่องว่าง cross-instance ที่ถูกปิดแล้ว
+demo ด้านล่างจำลองทั้งรูปแบบใน browser ของคุณ: in-memory bus ที่แชร์กันหนึ่งตัวและ server instance สองตัว แต่ละตัวถือ client ภายในของตัวเอง ดูลำดับใน log — message ถูก publish ครั้งเดียว จากนั้นทั้งสอง instance fan-out ต่อ และ client บน instance *อื่น* ก็ได้รับด้วย นั่นคือช่องว่าง cross-instance ที่ถูกปิดแล้ว
 
 export const backplaneDemo = `(function () {
   // A tiny in-page pub/sub bus — stands in for Redis/NATS/Kafka.
@@ -136,7 +136,7 @@ export const backplaneDemo = `(function () {
 
 <NodeRunner client:visible code={backplaneDemo} />
 
-log พิสูจน์ประเด็นนี้: ข้อความของ client-1 ถูก publish ครั้งเดียวบน instance A, bus ส่งมันให้ subscriber *ทั้งสอง* ตัว และ client 3 กับ 4 บน instance B ได้รับมันแม้ว่า instance A จะไม่เคยเห็น socket ของพวกเขาเลย เปลี่ยน `Bus` ในหน้านี้เป็น Redis client จริง แล้วรูปแบบนี้เป๊ะ ๆ ก็จะรันข้ามเครื่องได้
+log พิสูจน์ประเด็นนี้: message ของ client-1 ถูก publish ครั้งเดียวบน instance A แล้ว bus ส่งต่อให้ subscriber *ทั้งสอง* ตัว client 3 กับ 4 บน instance B จึงได้รับด้วย ทั้งที่ instance A ไม่เคยเห็น socket ของพวกเขาเลย เปลี่ยน `Bus` ในหน้านี้เป็น Redis client จริง แล้วรูปแบบเดียวกันนี้ก็รันข้ามเครื่องได้ทันที
 
 | Backplane | Latency | Durability | เหมาะกับ |
 |---|---|---|---|
@@ -144,7 +144,7 @@ log พิสูจน์ประเด็นนี้: ข้อความ�
 | NATS | ต่ำมาก | optional (JetStream) | Microservice messaging |
 | Kafka | ปานกลาง | สูง — log durable | Event sourcing, replay, audit |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **Publish Loop ผ่าน Socket โดยตรงแทน Bus**
 อาการ:
@@ -158,7 +158,7 @@ log พิสูจน์ประเด็นนี้: ข้อความ�
 - client ได้รับ message ซ้ำเมื่อมี 3 subscriber
 - subscribe ครั้งเดียวตอน instance start — ไม่ใช่ตอน client connect
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Pusher:**
 > - ใช้ Redis pub/sub backplane ระหว่าง instance — message publish ครั้งเดียว ถึง subscriber ทั้งหมด
@@ -168,17 +168,17 @@ log พิสูจน์ประเด็นนี้: ข้อความ�
 > - real-time event routing ข้าม data center
 
 <Callout title="แบบจำลองทางความคิด">
-เลิกคิดว่า "ส่งให้ client ทุกตัว" แล้วเริ่มคิดว่า "publish event แล้วแต่ละ instance ส่งให้ตัวของมันเอง" backplane เปลี่ยน broadcast ที่เข้าไม่ถึงหนึ่งครั้งให้กลายเป็น local broadcast หลายครั้ง หนึ่งครั้งต่อ instance — และเพราะ publisher เป็น subscriber ด้วย คุณจึงเขียนตรรกะการส่งเพียงครั้งเดียวเท่านั้น
+เลิกคิดว่า "ส่งให้ client ทุกตัว" แล้วเริ่มคิดว่า "publish event ออกไป แล้วแต่ละ instance ส่งให้ client ของตัวเอง" backplane เปลี่ยน broadcast ที่เข้าไม่ถึงหนึ่งครั้งให้กลายเป็น local broadcast หลายครั้ง หนึ่งครั้งต่อ instance — และเพราะ publisher เป็น subscriber ด้วย คุณจึงเขียนตรรกะการส่งเพียงครั้งเดียวเท่านั้น
 </Callout>
 
 export const quizBackplane = [
   {
     q: 'ในรูปแบบ backplane instance ทำอะไรในวินาทีที่ local client ส่งข้อความ?',
     options: [
-      'loop ผ่าน socket ภายในของมันแล้วส่งทันที',
-      'publish ข้อความไปยัง channel ที่แชร์กันโดยไม่ส่งมันด้วยตัวเอง',
+      'loop ผ่าน socket ภายในของตัวเองแล้วส่งทันที',
+      'publish message ไปยัง channel ที่แชร์กัน โดยไม่ส่งเองโดยตรง',
       'forward raw socket ไปยัง instance อื่น',
-      'เขียนข้อความลง database แล้ว poll หามัน',
+      'เขียน message ลง database แล้ว poll เอาทีหลัง',
     ],
     answer: 1,
   },
@@ -186,7 +186,7 @@ export const quizBackplane = [
     q: 'ทำไมจึงไม่มี branch พิเศษว่า "ส่งให้ client ของตัวเองด้วย" ใน publish handler?',
     options: [
       'local client ถูกส่งโดย database',
-      'instance ที่ publish เป็น subscriber ด้วย ดังนั้นมันจึงรับและ fan-out เหมือนตัวอื่น ๆ',
+      'instance ที่ publish เป็น subscriber ด้วย จึงรับแล้ว fan-out เหมือนตัวอื่น ๆ',
       'bus สะท้อนข้อความตรงไปยัง socket',
       'local client poll หาข้อความใหม่แยกต่างหาก',
     ],

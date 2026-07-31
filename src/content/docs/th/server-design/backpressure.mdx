@@ -11,11 +11,11 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-การ broadcast รู้สึกเหมือนฟรีจนกระทั่ง client หนึ่งดื่มไม่เร็วเท่าที่คุณริน โทรศัพท์บนเครือข่ายอ่อน, แท็บที่ OS throttle ไว้, แล็ปท็อปที่หลับไป — client เหล่านี้อ่านช้า และ server ที่เร็วของคุณก็เรียก `send` ต่อไป ข้อมูลที่ยังไม่ได้ส่งต้องไปอยู่ *ที่ไหนสักแห่ง* และที่นั่นคือ memory ของ server นี่คือ **backpressure** และการเพิกเฉยต่อมันคือวิธีที่ client ช้าตัวเดียวล้ม server ได้
+การ broadcast รู้สึกเหมือนฟรีจนกระทั่ง client หนึ่งดื่มไม่เร็วเท่าที่คุณริน โทรศัพท์บนเครือข่ายอ่อน, แท็บที่ OS throttle ไว้, แล็ปท็อปที่หลับไป — client เหล่านี้อ่านช้า และ server ที่เร็วของคุณก็เรียก `send` ต่อไป ข้อมูลที่ยังไม่ได้ส่งต้องไปกองอยู่ *ที่ไหนสักแห่ง* และที่นั่นคือ memory ของ server นี่คือ **backpressure** และการมองข้ามเรื่องนี้คือเหตุผลที่ client ช้าตัวเดียวล้ม server ได้
 
 ## byte ไปกองอยู่ที่ไหน
 
-`ws.send(data)` ไม่ block จนกว่า client จะรับข้อมูล — มันมอบ byte ให้ OS socket buffer แล้ว return ทันที ถ้า client อ่านช้า buffer นั้นจะเต็ม และข้อมูลที่ยังไม่ได้ส่งเพิ่มเติมจะ queue **อยู่ภายใน Node process ของคุณ** ส่ง byte ไปยัง client ที่ติดขัดใน loop แน่น ๆ แล้วคุณก็กำลังสร้าง in-memory queue ที่ไม่มีขอบเขตขึ้นมาอย่างแท้จริง:
+`ws.send(data)` ไม่ block รอจน client รับข้อมูล — แค่ยัด byte ให้ OS socket buffer แล้ว return ทันที ถ้า client อ่านช้า buffer นั้นจะเต็ม และข้อมูลที่ยังไม่ได้ส่งเพิ่มเติมจะ queue **อยู่ภายใน Node process ของคุณ** ส่ง byte ไปยัง client ที่ติดขัดใน loop แน่น ๆ แล้วคุณก็กำลังสร้าง in-memory queue ที่ไม่มีขอบเขตขึ้นมาอย่างแท้จริง:
 
 <Mermaid title="ผู้อ่านที่ช้าเปลี่ยนผู้ผลิตที่เร็วให้กลายเป็น memory queue ที่โตขึ้นเรื่อย ๆ" code={backpressureDiagram} />
 
@@ -25,11 +25,11 @@ export const backpressureDiagram = `flowchart LR
   BUF -- "drains slowly" --> SLOW["slow client"]
   BUF -. "if it keeps growing" .-> OOM["server memory exhausted"]`;
 
-อันตรายไม่ใช่ client ช้าตัวหนึ่ง — มันคือการที่ไม่มีอะไรหยุดยั้ง queue ไม่ให้โตขึ้นโดยไม่มีขอบเขต ทางแก้คือ **วัด** backlog และ **ตอบสนอง** เมื่อมันใหญ่เกินไป
+อันตรายไม่ได้อยู่ที่ client ช้าตัวเดียว — แต่อยู่ที่ไม่มีอะไรหยุด queue ไม่ให้โตไม่มีขอบเขต ทางแก้คือ **วัด** backlog แล้ว **ตอบสนอง** เมื่อโตเกินไป
 
 ## การวัดด้วย bufferedAmount
 
-ทุก `ws` socket เปิดเผย `ws.bufferedAmount` — จำนวน byte ที่ถูก queue ไว้โดย `send` แต่ยังไม่ได้ flush ไปยัง OS มันคือมาตรวัด backpressure ของคุณ ก่อนส่งข้อมูลที่ไม่สำคัญ ให้ตรวจมัน:
+ทุก `ws` socket เปิดเผย `ws.bufferedAmount` — จำนวน byte ที่ถูก queue ไว้โดย `send` แต่ยังไม่ได้ flush ไปยัง OS นี่คือมาตรวัด backpressure ของคุณ ก่อนส่งข้อมูลที่ไม่สำคัญ ให้ตรวจค่านี้ก่อน:
 
 ```ts
 const HIGH_WATER_MARK = 1 << 20; // 1 MiB of pending bytes
@@ -59,7 +59,7 @@ function safeSend(ws, data) {
 
 ## send callback
 
-`ws.send` รับ callback ที่ fire เมื่อข้อมูลถูกส่งมอบแล้ว (หรือเกิด error) มันคือสัญญาณต่อข้อความที่คุณใช้กำหนดจังหวะผู้ผลิตได้ — queue chunk ถัดไปก็ต่อเมื่อตัวก่อนหน้าถูก flush แล้วเท่านั้น:
+`ws.send` รับ callback ที่ fire เมื่อข้อมูลส่งมอบแล้ว (หรือเกิด error) นี่คือสัญญาณระดับ message ที่ใช้กำหนดจังหวะผู้ผลิตได้ — queue chunk ถัดไปก็ต่อเมื่อตัวก่อนหน้าถูก flush แล้วเท่านั้น:
 
 ```ts
 function pump(ws, chunks, i = 0) {
@@ -78,7 +78,7 @@ function pump(ws, chunks, i = 0) {
 
 ## ดู client ช้าค่อย ๆ ถูกถม
 
-เดโมด้านล่างจำลองผู้ผลิตที่ผลิตในอัตราสูงซึ่งตรวจ `bufferedAmount` ก่อน send แต่ละครั้ง มัน drop การอัปเดตเมื่อ buffer (ที่จำลอง) เกินขีดจำกัด และรายงานว่าส่งไปกี่ตัวเทียบกับ drop ไปกี่ตัว — พฤติกรรมแบบเป๊ะ ๆ ที่ feed จริงต้องการ
+เดโมด้านล่างจำลองผู้ผลิตที่ผลิตในอัตราสูงซึ่งตรวจ `bufferedAmount` ก่อน send ทุกครั้ง แล้ว drop การอัปเดตเมื่อ buffer (ที่จำลองไว้) เกินขีดจำกัด พร้อมรายงานว่าส่งไปกี่ตัวเทียบกับ drop ไปกี่ตัว — พฤติกรรมแบบเป๊ะ ๆ ที่ feed จริงต้องการ
 
 export const backpressureCode = `// Backpressure-aware producer. ws/wss/req in scope.
 const HIGH_WATER = 64 * 1024; // 64 KiB ceiling for this demo
@@ -114,7 +114,7 @@ ws.on('error', () => clearInterval(timer));`;
 
 <NodeRunner node client:visible code={backpressureCode} />
 
-client ที่สุขภาพดี drain เร็วพอจน `bufferedAmount` อยู่ใกล้ศูนย์และแทบไม่มีอะไรถูก drop ลองหน่วงผู้บริโภคแล้วคุณจะเห็น `dropped` ไต่ขึ้นขณะที่ memory ยังคงราบเรียบ — ซึ่งคือประเด็นทั้งหมด สังเกต `clearInterval` ตอน `close`: ผู้ผลิตที่กำพร้าซึ่งยังรันต่อหลังจาก client จากไปแล้วก็เป็น leak ชนิดหนึ่งในแบบของมันเอง การปกป้อง memory ของ server คือความรับผิดชอบสุดท้ายของ WebSocket server และเป็นตัวตัดสินว่ามันจะรอดวันที่เครือข่ายแย่หรือไม่
+client ที่สุขภาพดี drain เร็วพอจน `bufferedAmount` อยู่ใกล้ศูนย์และแทบไม่มีอะไรถูก drop ลองหน่วงผู้บริโภคแล้วคุณจะเห็น `dropped` ไต่ขึ้นขณะที่ memory ยังคงราบเรียบ — ซึ่งคือประเด็นทั้งหมด สังเกต `clearInterval` ตอน `close`: ผู้ผลิตที่กำพร้าและยังรันต่อหลัง client จากไปแล้วก็เป็น leak อีกชนิดหนึ่ง การปกป้อง memory คือความรับผิดชอบข้อสุดท้ายของ WebSocket server และเป็นตัวตัดสินว่าจะรอดวันที่เครือข่ายแย่หรือไม่
 
 | Backpressure Strategy | ทำงานอย่างไร | เหมาะกับ |
 |---|---|---|
@@ -123,7 +123,7 @@ client ที่สุขภาพดี drain เร็วพอจน `buffere
 | Slow down sender | แจ้ง sender ให้ส่งช้าลง | Controlled stream |
 | Pause + resume | pause input, resume เมื่อพร้อม | Stream processing |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ไม่ Check `ws.bufferedAmount` ก่อนส่ง**
 อาการ:
@@ -137,7 +137,7 @@ client ที่สุขภาพดี drain เร็วพอจน `buffere
 - client เห็นข้อมูลหาย โดยไม่รู้ว่าเกิดอะไร
 - ส่ง signal กลับ client เมื่อ drop: `{ type: "overflow", dropped: N }`
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Binance Market Data:**
 > - ส่ง price update ทุก 100ms — ถ้า client ช้า drop update เก่า
@@ -165,10 +165,10 @@ export const quizBackpressure = [
   {
     q: 'ทำไม client ช้าจึงเป็นความเสี่ยงด้าน memory สำหรับ server?',
     options: [
-      'มันเปิด connection มากเกินไป',
+      'เปิด connection มากเกินไป',
       'send return ทันทีและ byte ที่ยังไม่ได้ส่ง queue อยู่ใน process ของ server โดยโตขึ้นไม่มีขอบเขต',
-      'มัน encrypt ข้อมูลสองครั้ง',
-      'มันบังคับให้ server ต้อง poll',
+      'encrypt ข้อมูลสองครั้ง',
+      'บังคับให้ server ต้อง poll',
     ],
     answer: 1,
   },

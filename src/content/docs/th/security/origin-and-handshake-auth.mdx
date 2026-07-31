@@ -15,7 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## WebSocket ไม่ถูกป้องกันด้วย CORS
 
-นี่คือกับดักที่ดักได้แทบทุกคน เมื่อหน้าเว็บเรียก `fetch('https://your-api/...')` ข้าม origin เบราว์เซอร์จะรันกลไก CORS: มันอาจส่ง preflight และมันจะซ่อน response เว้นแต่ server ของคุณจะ opt in ด้วย header ที่ถูกต้อง การป้องกันนั้นเป็นแบบอัตโนมัติ
+นี่คือกับดักที่ดักได้แทบทุกคน เมื่อหน้าเว็บเรียก `fetch('https://your-api/...')` ข้าม origin เบราว์เซอร์จะรันกลไก CORS: อาจส่ง preflight ก่อน และจะซ่อน response เว้นแต่ server ของคุณจะ opt in ด้วย header ที่ถูกต้อง การป้องกันนั้นเป็นแบบอัตโนมัติ
 
 การอัปเกรด WebSocket ไม่ได้รับ **อะไรเลยจากสิ่งนั้น** เมื่อหน้าเว็บใด ๆ — รวมถึง `https://evil.example` — รันสิ่งนี้:
 
@@ -25,7 +25,7 @@ const ws = new WebSocket('wss://your-server/socket');
 
 เบราว์เซอร์จะ **ไม่** ส่ง CORS preflight, **ไม่** ปรึกษา same-origin policy, และ **จะ** แนบ cookie ของผู้ใช้สำหรับ `your-server` ถ้ามีอยู่ คำขออัปเกรดออกจากเบราว์เซอร์และมาถึง server ของคุณโดยดูเหมือนคำขอที่ถูกต้องเป๊ะ ๆ ถ้าผู้ใช้ล็อกอินอยู่ หน้าเว็บของผู้โจมตีก็มี socket ที่ authenticate แล้ว นี่คือ **Cross-Site WebSocket Hijacking** — ญาติของ CSRF
 
-สิ่งเดียวที่เบราว์เซอร์ *ให้* คุณคือ `Origin` header บน handshake ซึ่งตั้งเป็นหน้าที่เปิด socket และสคริปต์ปลอมแปลงไม่ได้ การอ่านและตรวจ header นั้นคือการป้องกัน และมันอยู่บนฝั่งของคุณทั้งหมด
+สิ่งเดียวที่เบราว์เซอร์ *ให้* คุณคือ `Origin` header บน handshake ซึ่งตั้งเป็นหน้าที่เปิด socket และสคริปต์ปลอมแปลงไม่ได้ การอ่านและตรวจ header นั้นคือการป้องกัน และอยู่บนฝั่งของคุณทั้งหมด
 
 ```http
 GET /socket HTTP/1.1
@@ -37,14 +37,14 @@ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
 Cookie: session=…
 ```
 
-จัดเก็บ allowlist ของ origin ที่คุณไว้ใจ และปฏิเสธทุกอย่างที่เหลือ **ก่อน** ที่จะทำการอัปเกรดให้เสร็จ
+จัดเก็บ allowlist ของ origin ที่คุณไว้ใจ และปฏิเสธทุกอย่างที่เหลือ **ก่อน** ที่จะอัปเกรดให้เสร็จ
 
 ## Authenticate ระหว่าง handshake
 
-Origin บอกคุณว่า *หน้าไหน* คุณยังต้องการ *ผู้ใช้คนไหน* ทำ authenticate การเชื่อมต่อในขณะที่มันยังเป็น HTTP request อยู่ — นั่นคือช่วงที่คุณมี header, cookie, และอิสระที่จะปฏิเสธอย่างสะอาด มีสามวิธีทั่วไปในการพา credential ไป:
+Origin บอกคุณว่า *หน้าไหน* คุณยังต้องการ *ผู้ใช้คนไหน* ทำ authenticate การเชื่อมต่อตอนที่ยังเป็น HTTP request อยู่ — นั่นคือช่วงที่คุณมี header, cookie, และอิสระที่จะปฏิเสธอย่างสะอาด มีสามวิธีทั่วไปในการพา credential ไป:
 
-- **Session cookie** ถ้าผู้ใช้ล็อกอินอยู่แล้วบน `https://app.example.com`, handshake จะพา cookie ของพวกเขาไปโดยอัตโนมัติ Validate มันฝั่ง server วิธีนี้สะดวกแต่เป็น *สิ่งที่ทำให้* Cross-Site WebSocket Hijacking เป็นไปได้พอดี — ซึ่งเป็นเหตุผลว่าทำไมการตรวจ `Origin` จึงเป็นข้อบังคับเมื่อคุณ authenticate ด้วย cookie
-- **Token ใน subprotocol** ส่ง bearer token ผ่าน `Sec-WebSocket-Protocol` header (อาร์กิวเมนต์ที่สองของ `new WebSocket(url, protocols)`) มันเดินทางใน header ไม่ใช่ตำแหน่งที่ถูก log และ server อ่านมันได้ระหว่างการอัปเกรด
+- **Session cookie** ถ้าผู้ใช้ล็อกอินอยู่แล้วบน `https://app.example.com`, handshake จะพา cookie ของพวกเขาไปโดยอัตโนมัติ Validate cookie นั้นฝั่ง server วิธีนี้สะดวกแต่เป็น *สิ่งที่ทำให้* Cross-Site WebSocket Hijacking เป็นไปได้พอดี — นั่นคือเหตุผลว่าทำไมการตรวจ `Origin` จึงเป็นข้อบังคับเมื่อคุณ authenticate ด้วย cookie
+- **Token ใน subprotocol** ส่ง bearer token ผ่าน `Sec-WebSocket-Protocol` header (อาร์กิวเมนต์ที่สองของ `new WebSocket(url, protocols)`) token เดินทางใน header ไม่ใช่ตำแหน่งที่ถูก log และ server อ่านได้ระหว่างการอัปเกรด
 - **Token ใน message แรก** เปิด socket จากนั้นทำให้ frame แรกสุดของ client เป็น message แบบ `auth` server จะคงการเชื่อมต่อไว้แบบยังไม่ authenticate และเงียบจนกว่า frame นั้นจะ validate ผ่าน
 
 และมี anti-pattern หนึ่งที่ต้องเลี่ยงเหนือสิ่งอื่นใด:
@@ -74,11 +74,11 @@ export const handshakeDiagram = `sequenceDiagram
     end
   end`;
 
-สังเกตว่าการตรวจทั้งสองเกิดขึ้น *ก่อน* `101 Switching Protocols` origin ที่ถูกปฏิเสธหรือ token ที่ผิดจะไม่มีวันกลายเป็น socket ที่เปิดอยู่ — และเมื่อเราปิด เราใช้ code **1008 (policy violation)** ซึ่งเป็นสัญญาณมาตรฐานว่าการเชื่อมต่อถูกปฏิเสธเพราะกฎ ไม่ใช่ความผิดพลาดของเครือข่าย
+สังเกตว่าการตรวจทั้งสองเกิดขึ้น *ก่อน* `101 Switching Protocols` origin ที่ถูกปฏิเสธหรือ token ที่ผิดจะไม่มีวันกลายเป็น socket ที่เปิดอยู่ — และเมื่อเราปิด เราใช้ code **1008 (policy violation)** ที่เป็นสัญญาณมาตรฐานว่าการเชื่อมต่อถูกปฏิเสธเพราะกฎ ไม่ใช่ความผิดพลาดของเครือข่าย
 
 ## server ที่รันได้จริงซึ่งปฏิเสธ origin และ token ที่แย่
 
-เดโมด้านล่างคือ **body ของ `connection` handler** สำหรับ server `ws` จริง ๆ ไลบรารี `ws` ส่ง `req` ให้คุณ — คำขออัปเกรดดั้งเดิม — ดังนั้น header ของมันยังคงใช้ได้ เราตรวจ `req.headers.origin` เทียบกับ allowlist จากนั้นดึง token จาก `Sec-WebSocket-Protocol` header แล้ว validate มัน อะไรก็ตามที่ไม่ผ่านจะได้รับ `ws.close(1008, …)` เปิดมันใน StackBlitz แล้วรัน `npm run client` เพื่อดูว่าการเชื่อมต่อถูกยอมรับหรือถูกปฏิเสธ
+เดโมด้านล่างคือ **body ของ `connection` handler** สำหรับ server `ws` จริง ๆ ไลบรารี `ws` ส่ง `req` ให้คุณ — คำขออัปเกรดดั้งเดิม — ดังนั้น header ของตัวเองยังคงใช้ได้ เราตรวจ `req.headers.origin` เทียบกับ allowlist จากนั้นดึง token จาก `Sec-WebSocket-Protocol` header แล้ว validate token นั้น อะไรก็ตามที่ไม่ผ่านจะได้รับ `ws.close(1008, …)` เปิดใน StackBlitz แล้วรัน `npm run client` เพื่อดูว่าการเชื่อมต่อถูกยอมรับหรือถูกปฏิเสธ
 
 export const handshakeServerCode = `// Body of wss.on('connection', (ws, req) => { ... }). ws/wss/req in scope.
 const ALLOWED_ORIGINS = ['https://app.example.com', 'http://localhost:8080'];
@@ -110,7 +110,7 @@ ws.send(\`welcome \${user} — your connection is authenticated\`);`;
 
 <NodeRunner node client:visible code={handshakeServerCode} />
 
-client ของ starter เปิดด้วย origin แบบ localhost แต่ไม่มี token ดังนั้นคุณจะเห็น server ปฏิเสธมันด้วย **close 1008** และ `invalid token` — ตรงกับการปฏิเสธที่หน้าเว็บของผู้โจมตีจะเจอเป๊ะ ๆ แก้ `VALID_TOKENS` หรือให้ client ส่ง subprotocol เพื่อดูเส้นทางที่ถูกยอมรับ แนวคิดสำคัญ: เมื่อ socket เปิดแล้ว ทั้ง *หน้าไหน* และ *ผู้ใช้คนไหน* ก็ถูกจัดการเรียบร้อยแล้ว และคำตอบของ "นี่คือใคร?" ถูกเก็บไว้บนตัวการเชื่อมต่อเองแล้ว
+client ของ starter เปิดด้วย origin แบบ localhost แต่ไม่มี token ดังนั้นคุณจะเห็น server ปฏิเสธการเชื่อมต่อด้วย **close 1008** และ `invalid token` — ตรงกับการปฏิเสธที่หน้าเว็บของผู้โจมตีจะเจอเป๊ะ ๆ แก้ `VALID_TOKENS` หรือให้ client ส่ง subprotocol เพื่อดูเส้นทางที่ถูกยอมรับ แนวคิดสำคัญ: เมื่อ socket เปิดแล้ว ทั้ง *หน้าไหน* และ *ผู้ใช้คนไหน* ก็ถูกจัดการเรียบร้อยแล้ว และคำตอบของ "นี่คือใคร?" ถูกเก็บไว้บนตัวการเชื่อมต่อเองแล้ว
 
 | Auth Method | Security | Convenience |
 |---|---|---|
@@ -119,7 +119,7 @@ client ของ starter เปิดด้วย origin แบบ localhost แ
 | Token ใน First Message | ดี — ควบคุมได้ | เพิ่ม latency เล็กน้อย |
 | Token ใน URL Query String | แย่ — token รั่วใน log | อย่าใช้ |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ไม่ Validate Origin — Cross-Site WebSocket Hijacking**
 อาการ:
@@ -133,7 +133,7 @@ client ของ starter เปิดด้วย origin แบบ localhost แ
 - token รั่วใน browser history และ referer header
 - ใช้ subprotocol header หรือ first-message auth แทน
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **GitHub Codespaces:**
 > - validate Origin + token ระหว่าง handshake
@@ -144,7 +144,7 @@ client ของ starter เปิดด้วย origin แบบ localhost แ
 > - validate Origin เทียบกับ `dashboard.stripe.com` domain allowlist
 
 <Callout title="ป้องกันประตู แล้วค่อยไว้ใจห้อง">
-handshake คือช่วงเดียวที่คุณมี HTTP header, cookie, และวิธีปฏิเสธอย่างสะอาดได้อย่างราคาถูก ตรวจ `Origin` เทียบกับ allowlist, validate credential (cookie, subprotocol token, หรือ first-message token — ไม่ใช่ URL), และปิดความพยายามที่แย่ด้วย **1008** ทุกอย่างหลังจากนี้ขึ้นอยู่กับการทำการตรวจสองอย่างนี้ให้ถูกต้อง
+handshake คือช่วงเดียวที่คุณมี HTTP header, cookie, และวิธีปฏิเสธอย่างสะอาดได้อย่างราคาถูก ตรวจ `Origin` เทียบกับ allowlist, validate credential (cookie, subprotocol token, หรือ first-message token — ไม่ใช่ URL), และปิดความพยายามที่แย่ด้วย **1008** ทุกอย่างหลังจากนี้ขึ้นอยู่กับการตรวจสองอย่างนี้ให้ถูกต้อง
 </Callout>
 
 export const quizOrigin = [

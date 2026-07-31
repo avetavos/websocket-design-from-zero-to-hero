@@ -15,12 +15,12 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## WebSocket server ทำอะไรกันแน่
 
-HTTP server คิดในแง่หนึ่ง request หนึ่ง response แล้วก็ลืมคุณไป WebSocket server ลืมคุณไม่ได้ — คุณยังอยู่บนสายอยู่ ถ้าถอดงานออกมาเป็นแก่น มันมีความรับผิดชอบจริง ๆ อยู่สี่อย่าง:
+HTTP server คิดในแง่หนึ่ง request หนึ่ง response แล้วก็ลืมคุณไป WebSocket server ลืมคุณไม่ได้ — คุณยังอยู่บนสายอยู่ ถ้าถอดงานลงมาถึงแก่น จะเหลือความรับผิดชอบจริง ๆ อยู่สี่อย่าง:
 
-- **รับ upgrade (Accept upgrades).** connection เริ่มต้นชีวิตในฐานะ HTTP request ธรรมดาที่พก header `Upgrade: websocket` มาด้วย server ตรวจสอบความถูกต้องแล้วสลับ socket ไปใช้โปรโตคอล WebSocket จากจุดนั้นเป็นต้นไปมันคือท่อแบบถาวร ไม่ใช่ request อีกต่อไป
+- **รับ upgrade (Accept upgrades).** connection เริ่มต้นชีวิตในฐานะ HTTP request ธรรมดาที่พก header `Upgrade: websocket` มาด้วย server ตรวจสอบความถูกต้องแล้วสลับ socket ไปใช้ protocol WebSocket จากจุดนั้นเป็นต้นไปก็กลายเป็นท่อถาวร ไม่ใช่ request อีกต่อไป
 - **ติดตาม connection (Track connections).** ทุก socket ที่รับเข้ามาต้องถูกจดจำ server เก็บชุดของผู้ที่เชื่อมต่ออยู่แบบ live ไว้เพื่อให้หากลับมาได้ในภายหลัง — เพื่อ push update, เพื่อนับจำนวน, หรือเพื่อ clean up เมื่อพวกเขาจากไป
-- **Route ข้อความ (Route messages).** เมื่อ frame เข้ามา server อ่านมันแล้วตัดสินใจว่ามันหมายถึงอะไร: บรรทัดแชทสำหรับ room หนึ่ง, คำขอ subscribe, ping, หรือคำสั่ง การ routing เปลี่ยน byte ดิบให้กลายเป็นพฤติกรรมของแอปพลิเคชัน
-- **Broadcast.** ลูกเล่นเด่น เพราะ server holding ทุก socket ที่เปิดอยู่ มันจึงส่ง event เดียวไปยัง client *จำนวนมาก* ได้พร้อมกัน — ในชั่วขณะที่มันเกิดขึ้น โดยที่ไม่มีใครต้องร้องขอ
+- **Route message (Route messages).** พอ frame เข้ามา server อ่านแล้วตัดสินว่าหมายถึงอะไร: บรรทัดแชทของ room หนึ่ง, request subscribe, ping หรือคำสั่ง การ routing เปลี่ยน byte ดิบให้กลายเป็นพฤติกรรมของ application
+- **Broadcast.** ลูกเล่นเด่น เพราะ server ถือ socket ที่เปิดอยู่ไว้ทุกตัว จึงส่ง event เดียวไปยัง client *จำนวนมาก* ได้พร้อมกัน — ในวินาทีที่เกิดขึ้นจริง โดยไม่ต้องมีใครร้องขอ
 
 สังเกตว่าสามในสี่อย่างนี้เป็นสิ่งที่ HTTP server ธรรมดาไม่เคยต้องทำ การ tracking, การ routing บน connection ที่ถาวร และการ fan-out จะมีความหมายก็ต่อเมื่อ connection **ยังเปิดค้างอยู่**
 
@@ -55,7 +55,7 @@ export const hubDiagram = `flowchart TB
 
 1. **การออกแบบ Server (คุณอยู่ที่นี่)** — งานสี่อย่างของ server และ `ws` server ตัวแรกที่รันได้จริง
 2. **A WebSocket server** — ไลบรารี `ws`: `WebSocketServer`, `connection` event, `ws.on('message')`, และ `ws.send`
-3. **Connection state** — การแนบข้อมูลต่อ socket (user id, subscriptions) และ clean up มันตอน close
+3. **Connection state** — การแนบข้อมูลต่อ socket (user id, subscriptions) แล้ว clean up ตอน close
 4. **Rooms and broadcast** — การจัดกลุ่ม client เข้าเป็น channel และ fan ข้อความออกไปยัง room หนึ่งเทียบกับทุกคน
 5. **Backpressure** — เกิดอะไรขึ้นเมื่อ client ช้าตามไม่ทัน และจะปกป้อง memory ของ server อย่างไร
 
@@ -63,7 +63,7 @@ export const hubDiagram = `flowchart TB
 
 เดโมในโมดูลนี้คือ **Node server จริง** ที่สร้างบนไลบรารี [`ws`](/websocket/th/the-client-api/) — ไลบรารี WebSocket ที่ใช้กันแพร่หลายที่สุดสำหรับ Node เปิดอันใดก็ได้ใน **StackBlitz** เพื่อรัน `WebSocketServer` ของจริง จากนั้น `npm run client` ใน terminal ที่สองเพื่อเชื่อมต่อ
 
-ตลอดทั้งโมดูลนี้ codeที่คุณเห็นคือ **body ของ connection handler** — มันรันหนึ่งครั้งต่อ client ที่เชื่อมต่อ โดยมีสาม identifier อยู่ใน scope แล้ว: `ws` (socket ของ client รายนี้), `wss` (server, ใช้สำหรับ broadcast), และ `req` (upgrade request) ตัวอย่างด้านล่างทักทาย client ใหม่แต่ละราย, echo สิ่งที่พวกเขาส่งมา, และ log เมื่อพวกเขาจากไป
+ตลอดทั้งโมดูลนี้ code ที่คุณเห็นคือ **body ของ connection handler** — รันหนึ่งครั้งต่อ client ที่เชื่อมต่อเข้ามา โดยมีสาม identifier อยู่ใน scope แล้ว: `ws` (socket ของ client รายนี้), `wss` (server, ใช้สำหรับ broadcast), และ `req` (upgrade request) ตัวอย่างด้านล่างทักทาย client ใหม่แต่ละราย, echo สิ่งที่พวกเขาส่งมา, และ log เมื่อพวกเขาจากไป
 
 export const helloServerCode = `// Runs once per connected client. ws/wss/req are in scope.
 ws.send('welcome — you are connected to a real ws server');
@@ -78,7 +78,7 @@ ws.on('close', () => console.log('a client disconnected'));`;
 
 <NodeRunner node client:visible code={helloServerCode} />
 
-เมื่อคุณเชื่อมต่อ client เข้ามา server จะส่งคำทักทายทันที จากนั้น echo ข้อความของคุณกลับมาพร้อม prefix `echo:` การ `ws.send` ตอน connect — ก่อนที่ client จะพูดอะไรเลย — คือส่วนที่ HTTP ไม่มีวันทำได้: server พูดก่อน ทุกอย่างที่เหลือในโมดูลนี้สร้างขึ้นบนการ holding connection นั้นให้เปิดค้างไว้และตัดสินใจว่าจะส่งอะไรผ่านมัน
+เมื่อคุณเชื่อมต่อ client เข้ามา server จะส่งคำทักทายทันที จากนั้น echo message ของคุณกลับมาพร้อม prefix `echo:` การ `ws.send` ตอน connect — ก่อนที่ client จะพูดอะไรเลย — คือสิ่งที่ HTTP ไม่มีวันทำได้: server พูดก่อน ทุกอย่างที่เหลือในโมดูลนี้ต่อยอดจากการถือ connection นั้นเปิดค้างไว้แล้วตัดสินใจว่าจะส่งอะไรผ่านเข้าไป
 
 <Callout title="งานสี่อย่างของ server">
 WebSocket server **รับ upgrade**, **ติดตาม** ทุก connection ที่เปิดอยู่, **route** ข้อความขาเข้า, และ **broadcast** ไปยัง client จำนวนมากพร้อมกัน สามในสี่อย่างนี้มีอยู่ก็เพราะ connection เปิดค้างไว้ — ความถาวรนั้นคือเหตุผลทั้งหมดที่ทำให้การออกแบบ server ต่างจาก HTTP
@@ -108,9 +108,9 @@ export const quizIndex = [
   {
     q: 'ทำไม server เดโมจึงส่งข้อความ "welcome" ได้ก่อนที่ client จะส่งอะไรมา?',
     options: [
-      'client แอบร้องขอมันก่อนแล้ว',
+      'client แอบร้องขอไว้ก่อนแล้ว',
       'connection เปิดค้างไว้ ดังนั้น server จึง push เมื่อไหร่ก็ได้',
-      'HTTP keep-alive ส่งมันมาให้',
+      'HTTP keep-alive ส่งมาให้เอง',
       'browser cache คำทักทายไว้',
     ],
     answer: 1,

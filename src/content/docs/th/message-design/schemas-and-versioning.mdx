@@ -11,7 +11,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-แอป WebSocket จริงไม่เคยถูก deploy เพียงครั้งเดียว server ปล่อยตัวแก้ไข client อัปเดตตามตารางของตัวเอง mobile build เก่ายังคงคุยกับ server ใหม่ต่อไปเป็น *เดือน ๆ* message protocol ของคุณต้องรอดผ่านความปั่นป่วนนั้น — และสองแนวคิดที่ทำให้มันรอดได้คือ **message envelope** และ **field version**
+แอป WebSocket จริงไม่เคยถูก deploy เพียงครั้งเดียว server ปล่อยตัวแก้ไข client อัปเดตตามตารางของตัวเอง mobile build เก่ายังคุยกับ server ใหม่ต่อไปอีกเป็น *เดือน ๆ* message protocol ของคุณต้องรอดผ่านความปั่นป่วนนั้น — และสองแนวคิดที่ทำให้รอดได้คือ **message envelope** กับ **field version**
 
 ## envelope
 
@@ -37,13 +37,13 @@ export const envelopeDiagram = `flowchart LR
 
 ## validate สิ่งที่เข้ามา — อย่าเชื่อ wire เด็ดขาด
 
-อะไรก็มาถึง socket ได้: client ที่มีบั๊ก, build เก่า, message ที่ผิดรูปแบบหรือแม้กระทั่งประสงค์ร้าย ก่อนที่ handler จะแตะ message **จง validate envelope**: มันต้อง parse เป็น JSON ได้ มี `type` ที่รู้จัก พก `v` และมี field ที่ `type` นั้นต้องการ ปฏิเสธสิ่งอื่นด้วยข้อความ error ที่ชัดเจนแทนที่จะปล่อยให้มันทำให้ handler crash กลางคัน ใน production คุณจะทำสิ่งนี้ด้วย schema library (Zod, Ajv/JSON Schema หรือ Protobuf validator ที่ถูก generate) หลักการเหมือนกันในทุกระดับขนาด: **ข้อมูลที่เข้ามาถือว่าไม่น่าเชื่อถือจนกว่าจะพิสูจน์ได้ว่าถูกต้องตามรูปแบบ**
+อะไรก็มาถึง socket ได้: client ที่มีบั๊ก, build เก่า, message ที่ผิดรูปแบบหรือแม้กระทั่งประสงค์ร้าย ก่อนที่ handler จะแตะ message **จง validate envelope**: ต้อง parse เป็น JSON ได้ มี `type` ที่รู้จัก พก `v` และมี field ที่ `type` นั้นต้องการครบ นอกจากนั้นให้ปฏิเสธด้วย error ที่ชัดเจน แทนที่จะปล่อยเข้าไปทำ handler crash กลางคัน ใน production คุณจะทำสิ่งนี้ด้วย schema library (Zod, Ajv/JSON Schema หรือ Protobuf validator ที่ถูก generate) หลักการเหมือนกันในทุกระดับขนาด: **ข้อมูลที่เข้ามาถือว่าไม่น่าเชื่อถือจนกว่าจะพิสูจน์ได้ว่าถูกต้องตามรูปแบบ**
 
 ## พัฒนาแบบเพิ่มเข้าไป
 
-เมื่อ client อยู่ในมือผู้ใช้แล้ว คุณเปลี่ยนความหมายของ field ที่มีอยู่ไม่ได้ — client เก่ายังคงอ่านมันแบบเดิม กฎที่ทำให้ protocol ยังมีชีวิตอยู่:
+เมื่อ client อยู่ในมือผู้ใช้แล้ว คุณเปลี่ยนความหมายของ field เดิมไม่ได้แล้ว — client เก่ายังอ่านแบบเดิมอยู่ กฎที่ทำให้ protocol ยังมีชีวิตอยู่:
 
-- **เพิ่ม อย่าเอามาใช้ใหม่** field ใหม่ที่เป็น optional ปลอดภัย client เก่าเพิกเฉยสิ่งที่ไม่รู้จัก client ใหม่อ่านข้อมูลเพิ่มเติม การ *ลบ* field หรือ *เปลี่ยนความหมายของมัน* จะทำให้ใครบางคนพัง
+- **เพิ่ม อย่าเอามาใช้ใหม่** field ใหม่ที่เป็น optional ปลอดภัย client เก่าเพิกเฉยสิ่งที่ไม่รู้จัก client ใหม่อ่านข้อมูลเพิ่มเติม แต่การ *ลบ* field หรือ *เปลี่ยนความหมาย* จะทำให้ใครสักคนพังแน่นอน
 - **bump `v` สำหรับการเปลี่ยนแปลงที่ breaking** เมื่อการเปลี่ยนแปลงเพิ่มแบบ additive ไม่ได้จริง ๆ จงยก version ขึ้นและให้ server รองรับค่า `v` ทั้งสองในช่วงเวลา migration โดยแตกแขนงตาม `v`
 - **ใส่ค่าเริ่มต้นให้สิ่งที่ขาดหาย** เมื่อ field ใหม่ไม่มีอยู่ (client เก่าไม่ได้ส่งมา) ฝั่งรับใส่ค่าเริ่มต้นที่สมเหตุสมผลแทนที่จะล้มเหลว
 
@@ -51,7 +51,7 @@ export const envelopeDiagram = `flowchart LR
 
 ## เดโม: validate แล้วค่อยพัฒนา
 
-เดโม validate ทุก envelope ที่เข้ามา แล้วแสดงการพัฒนาแบบ additive ในการทำงานจริง: server เข้าใจ `chat` message แบบ **v1** *และ* message แบบ **v2** ที่เพิ่ม field `lang` แบบ optional — จัดการได้ทั้งสองอย่าง และใส่ค่าเริ่มต้น `lang` เมื่อ client เก่าละไว้ message ที่จงใจทำให้ผิดรูปแบบถูกปฏิเสธ ไม่ได้ crash มันรันบน echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง
+เดโม validate ทุก envelope ที่เข้ามา แล้วแสดงการพัฒนาแบบ additive ในการทำงานจริง: server เข้าใจ `chat` message แบบ **v1** *และ* message แบบ **v2** ที่เพิ่ม field `lang` แบบ optional — จัดการได้ทั้งสองอย่าง และใส่ค่าเริ่มต้นให้ `lang` เมื่อ client เก่าละไว้ ส่วน message ที่จงใจทำให้ผิดรูปแบบจะโดนปฏิเสธ ไม่ใช่ crash ทั้งหมดนี้รันบน echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง
 
 export const schemaCode = `(function () {
   // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
@@ -112,7 +112,7 @@ export const schemaCode = `(function () {
 
 <NodeRunner client:visible code={schemaCode} />
 
-message v1 และ message v2 ไหลผ่าน `handleChat` *เดียวกัน* ทั้งคู่ field `lang` ใหม่ปรากฏเฉพาะตรงที่มันถูกส่งมา และใส่ค่าเริ่มต้นเป็น `en` ตรงที่ไม่มี — นั่นคือการพัฒนาแบบ additive ที่กำลังทำงาน message ที่สามไม่เคยไปถึง handler เพราะ validation หยุดมันไว้ตั้งแต่หน้าประตู สร้างนิสัยสองอย่างนี้ตั้งแต่วันแรก แล้ว protocol ของคุณจะเติบโตได้เป็นปี ๆ โดยไม่ต้องมีวัน flag day
+message v1 และ message v2 ไหลผ่าน `handleChat` *เดียวกัน* ทั้งคู่ field `lang` ใหม่โผล่เฉพาะตอนที่ส่งมาจริง และเติมค่าเริ่มต้นเป็น `en` เมื่อไม่มี — นั่นคือการพัฒนาแบบ additive ที่กำลังทำงาน ส่วน message ตัวที่สามไม่เคยไปถึง handler เพราะ validation สกัดไว้ตั้งแต่หน้าประตู สร้างนิสัยสองอย่างนี้ตั้งแต่วันแรก แล้ว protocol ของคุณจะเติบโตได้เป็นปี ๆ โดยไม่ต้องมีวัน flag day
 
 | Evolution Strategy | ความปลอดภัย | Complexity |
 |---|---|---|
@@ -120,7 +120,7 @@ message v1 และ message v2 ไหลผ่าน `handleChat` *เดีย
 | Bump version field | ปานกลาง — server ต้อง support หลาย version | ปานกลาง |
 | Breaking change ไม่มี migration | ต่ำ — client เก่าพัง | - |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ไม่ Validate Message ก่อน Handle**
 อาการ:
@@ -134,7 +134,7 @@ message v1 และ message v2 ไหลผ่าน `handleChat` *เดีย
 - behavior เปลี่ยนโดย client เก่าไม่รู้ตัว
 - เพิ่ม field ใหม่เสมอ อย่าเปลี่ยน field เดิม — bump `v` เมื่อ breaking change หลีกเลี่ยงไม่ได้
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Discord Gateway:**
 > - ทุก event มี `op` (opcode), `d` (data), `s` (sequence), `t` (event name)
@@ -145,7 +145,7 @@ message v1 และ message v2 ไหลผ่าน `handleChat` *เดีย
 > - version field ใน subscription type — รองรับหลาย version พร้อมกัน
 
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">
-ห่อทุก message ด้วย **envelope** ที่สม่ำเสมอ (`type` + `v` + `payload`) **validate** สิ่งที่เข้ามาก่อนที่ handler ใด ๆ จะเชื่อมัน และ **พัฒนาแบบ additive** — เพิ่ม field ที่เป็น optional และ bump `v` สำหรับการเปลี่ยนแปลงที่ breaking — เพื่อให้ client เก่าและใหม่คุยกับ server เดียวกันได้ต่อไป
+ห่อทุก message ด้วย **envelope** ที่สม่ำเสมอ (`type` + `v` + `payload`) **validate** ทุกอย่างที่เข้ามาก่อนที่ handler จะไปเชื่อ และ **พัฒนาแบบ additive** — เพิ่ม field ที่เป็น optional และ bump `v` สำหรับการเปลี่ยนแปลงที่ breaking — เพื่อให้ client เก่าและใหม่คุยกับ server เดียวกันได้ต่อไป
 </Callout>
 
 export const quizSchemas = [
@@ -160,12 +160,12 @@ export const quizSchemas = [
     answer: 1,
   },
   {
-    q: 'ทำไมต้อง validate message ที่เข้ามาก่อนจัดการมัน?',
+    q: 'ทำไมต้อง validate message ที่เข้ามาก่อนลงมือจัดการ?',
     options: [
-      'เพราะ WebSocket รับประกันอยู่แล้วว่ามันถูกต้องตามรูปแบบ',
-      'เพราะ client ใด ๆ — ที่มีบั๊ก ล้าสมัย หรือประสงค์ร้าย — ส่งข้อมูลผิดรูปแบบมาได้ มันจึงไม่น่าเชื่อถือจนกว่าจะพิสูจน์ได้ว่าถูกต้อง',
+      'เพราะ WebSocket รับประกันความถูกต้องตามรูปแบบให้อยู่แล้ว',
+      'เพราะ client ตัวไหนก็ตาม — มีบั๊ก ล้าสมัย หรือประสงค์ร้าย — ส่งข้อมูลผิดรูปแบบมาได้ จึงเชื่อไม่ได้จนกว่าจะพิสูจน์ว่าถูกต้อง',
       'การ validate ทำให้ message เล็กลง',
-      'มันจำเป็นเฉพาะกับ binary frame เท่านั้น',
+      'จำเป็นเฉพาะกับ binary frame เท่านั้น',
     ],
     answer: 1,
   },

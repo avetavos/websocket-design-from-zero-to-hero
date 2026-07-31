@@ -1,6 +1,6 @@
 ---
 title: 'Sticky vs Stateless'
-description: 'route client กลับไปยัง instance ของมันด้วย sticky session หรือปล่อยให้ instance ใดก็ได้ให้บริการจาก shared state — พร้อมการตั้งค่า load balancer L4/L7, upgrade header และ trade-off'
+description: 'route client กลับไปยัง instance เดิมด้วย sticky session หรือปล่อยให้ instance ใดก็ได้ให้บริการจาก shared state — พร้อมการตั้งค่า load balancer L4/L7, upgrade header และ trade-off'
 sidebar:
   order: 5
 ---
@@ -11,14 +11,14 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-คุณมี backplane ที่ fan-out ข้อความและ shared store ที่ติดตาม presence แล้ว เหลือคำถามเดียว และ load balancer คือที่ที่มันถูกตอบ: เมื่อ client เชื่อมต่อ — หรือ *re*connect — instance ไหนควรจัดการมัน? มีสองปรัชญา และมันผลัก architecture ของคุณไปในทิศทางตรงกันข้าม
+คุณมี backplane ที่ fan-out message และ shared store ที่ติดตาม presence แล้ว เหลือคำถามเดียว และคนตอบคือ load balancer: เมื่อ client เชื่อมต่อ — หรือ *re*connect — instance ไหนควรรับไปดูแล? มีสองปรัชญา และแต่ละแบบผลัก architecture ของคุณไปคนละทิศ
 
 ## สองคำตอบสำหรับ "instance ไหน?"
 
-- **sticky session** load balancer ปักหมุด client แต่ละตัวไว้กับ instance หนึ่งและ route มันกลับไปที่นั่นทุกครั้ง instance จึงสามารถเก็บ state ที่มีความหมายไว้ใน memory ได้ เพราะ client ตัวเดิมกลับมาที่เดิมเสมอ
+- **sticky session** load balancer ปักหมุด client แต่ละตัวไว้กับ instance หนึ่งและ route กลับไปที่นั่นทุกครั้ง instance จึงเก็บ state ที่มีความหมายไว้ใน memory ได้ เพราะ client ตัวเดิมกลับมาที่เดิมเสมอ
 - **stateless** instance ใดก็ได้สามารถให้บริการ client ใดก็ได้ ไม่มี instance ใดถือ state ที่มีความสำคัญ — ทุกสิ่งที่สำคัญอยู่ใน shared store และวิ่งบน backplane — ดังนั้น balancer จึงอิสระที่จะ route connection ไปที่ไหนก็ได้
 
-<Mermaid title="sticky ปักหมุด client ไว้กับ instance ของมัน stateless route ที่ไหนก็ได้ผ่าน shared state" code={stickyDiagram} />
+<Mermaid title="sticky ปักหมุด client ไว้กับ instance เดียว ส่วน stateless route ที่ไหนก็ได้ผ่าน shared state" code={stickyDiagram} />
 
 export const stickyDiagram = `flowchart TB
   subgraph sticky["Sticky sessions"]
@@ -45,7 +45,7 @@ WebSocket handshake คือ HTTP `GET` ที่มี:
 
 balancer หรือ proxy ที่ตัดหรือเพิกเฉยต่อ header เหล่านี้จะเปลี่ยน handshake ให้กลายเป็น HTTP request ธรรมดา และ connection ล้มเหลวก่อนที่ข้อความใดจะถูกส่ง มีผลตามมาในทางปฏิบัติสองอย่าง:
 
-- proxy ต้องทำงานในโหมดที่ **forward การ upgrade** แทนที่จะปิดมันเหมือน HTTP ธรรมดา
+- proxy ต้องทำงานในโหมดที่ **forward การ upgrade** แทนที่จะปิด connection เหมือน HTTP ธรรมดา
 - WebSocket ไม่มี request หลัง handshake ดังนั้น **idle/read timeout** ต้องยาว (หรือปิดไว้) — มิฉะนั้น proxy จะปิด connection ที่สุขภาพดีอย่างสมบูรณ์แต่เงียบอยู่
 
 ```nginx
@@ -61,38 +61,38 @@ location /ws {
 
 ## L4 กับ L7
 
-*ที่ใด*ใน stack ที่ balancer ทำงานอยู่เปลี่ยนสิ่งที่มันทำได้
+balancer ทำงานอยู่ตรงไหนของ stack เป็นตัวกำหนดว่าทำอะไรได้บ้าง
 
-- **L4 (transport / TCP)** balancer forward raw TCP และไม่เคยอ่าน HTTP เลย มันมองไม่เห็น header หรือ cookie ดังนั้นมันจึงเร็วและปลอดภัยต่อ upgrade โดยธรรมชาติ — ไม่มี HTTP layer ให้ทำพัง affinity ทำโดย client IP หรือ connection ถูกและเรียบง่าย แต่ตาบอดต่อทุกอย่างที่อยู่เหนือ TCP
-- **L7 (application / HTTP)** balancer เข้าใจ HTTP ดังนั้นมันสามารถ route ตาม path, ตั้ง cookie และอ่าน upgrade header ได้ พลังนั้นก็คือความเสี่ยงด้วย: L7 proxy ที่ไม่ได้ถูกตั้งค่าสำหรับ WebSocket คือตัวเดียวกับที่ตัด upgrade ทิ้ง ทำถูกต้อง L7 ให้ stickiness แบบ cookie และการควบคุมต่อ route แก่คุณ ทำผิด มันก็ทำ handshake พังเงียบ ๆ
+- **L4 (transport / TCP)** balancer forward raw TCP และไม่เคยอ่าน HTTP เลย มองไม่เห็น header หรือ cookie จึงเร็วและปลอดภัยต่อ upgrade โดยธรรมชาติ — ไม่มี HTTP layer ให้ทำพัง affinity ทำโดย client IP หรือ connection ถูกและเรียบง่าย แต่ตาบอดต่อทุกอย่างที่อยู่เหนือ TCP
+- **L7 (application / HTTP)** balancer เข้าใจ HTTP จึง route ตาม path, ตั้ง cookie และอ่าน upgrade header ได้ พลังนั้นก็คือความเสี่ยงด้วย: L7 proxy ที่ตั้งค่าไม่รองรับ WebSocket คือตัวเดียวกับที่ตัด upgrade ทิ้ง ตั้งถูก L7 ให้ stickiness แบบ cookie และการควบคุมระดับ route ตั้งผิด handshake ก็พังเงียบ ๆ
 
 รูปแบบที่พบบ่อยคือ L4 สำหรับ throughput ดิบและความเรียบง่าย หรือ L7 ที่ตั้งค่าถูกต้องเมื่อคุณต้องการ cookie affinity หรือ routing ตาม path
 
 ## stickiness ถูกปักหมุดอย่างไรจริง ๆ
 
 - **IP hash (L4 หรือ L7)** route ตาม hash ของ client IP เรียบง่าย แต่ mobile client เปลี่ยน IP และผู้ใช้จำนวนมากอาจซ่อนอยู่หลัง NAT เดียว ทำให้ load เบี้ยว
-- **cookie affinity (L7)** balancer ตั้ง cookie ที่ระบุชื่อ instance และเคารพมันตอน reconnect แม่นยำกว่า IP แต่ต้องการ L7 proxy ที่จัดการ upgrade ได้อย่างถูกต้อง
+- **cookie affinity (L7)** balancer ตั้ง cookie ที่ระบุชื่อ instance แล้วอ่าน cookie นั้นตอน reconnect แม่นยำกว่า IP แต่ต้องใช้ L7 proxy ที่จัดการ upgrade ได้ถูกต้อง
 
 ## trade-off
 
 | | sticky session | stateless |
 | --- | --- | --- |
-| in-memory state ต่อ client | อนุญาต — client กลับมาหามัน | หลีกเลี่ยง — อยู่ใน shared store |
+| in-memory state ต่อ client | อนุญาต — client กลับมาที่ instance เดิม | หลีกเลี่ยง — อยู่ใน shared store |
 | สูญหายเมื่อ instance ตาย | local state ของ client นั้น | ไม่มีอะไรที่เฉพาะกับ instance |
 | การ rebalance load | ยาก — client ถูกปักหมุด | ง่าย — route ที่ไหนก็ได้ |
 | deploy / autoscaling | ปั่นป่วนต่อ client ที่ถูกปักหมุด | ราบรื่น |
 | ต้องการ backplane สำหรับ broadcast | ใช่ | ใช่ |
 
-สรุปอย่างตรงไปตรงมา: stickiness ซื้อความสะดวกในการไว้ใจ in-memory state ให้คุณ โดยแลกกับความยืดหยุ่นและการ fail อย่างนุ่มนวล ส่วน stateless ทำให้คุณเสียมากกว่าตั้งแต่ต้น — ทุกข้อเท็จจริงที่มีความหมายต้องไปอยู่ใน shared store และ backplane — แต่มัน scale, deploy และ recover ได้ราบรื่นกว่ามาก
+สรุปอย่างตรงไปตรงมา: stickiness ซื้อความสะดวกในการไว้ใจ in-memory state ให้คุณ โดยแลกกับความยืดหยุ่นและการ fail อย่างนุ่มนวล ส่วน stateless ทำให้คุณเสียมากกว่าตั้งแต่ต้น — ทุกข้อเท็จจริงที่มีความหมายต้องไปอยู่ใน shared store และ backplane — แต่ scale, deploy และ recover ได้ราบรื่นกว่ามาก
 
-สังเกตว่า backplane จำเป็นในคอลัมน์ **ทั้งสอง** stickiness route client *กลับ* ไปยัง instance ของมัน แต่มันไม่ได้ช่วยให้ instance A ไปถึง client บน instance B เลย stickiness ว่าด้วยการ reconnect และ local state มันไม่เคยเป็นตัวแทนของ cross-instance fan-out สำหรับระบบ real-time สมัยใหม่ส่วนใหญ่ ค่าเริ่มต้นที่แนะนำคือ **stateless instance บวกกับ backplane และ shared store** โดยเก็บ stickiness ไว้สำหรับกรณีที่การสร้าง state ต่อ client ขึ้นใหม่ทุกครั้งที่ reconnect จะแพงจริง ๆ
+สังเกตว่า backplane จำเป็นในคอลัมน์ **ทั้งสอง** stickiness route client *กลับ* ไปยัง instance เดิม แต่ไม่ได้ช่วยให้ instance A ไปถึง client บน instance B เลย stickiness ว่าด้วยการ reconnect และ local state ไม่ใช่ตัวแทนของ cross-instance fan-out สำหรับระบบ real-time สมัยใหม่ส่วนใหญ่ ค่าเริ่มต้นที่แนะนำคือ **stateless instance บวกกับ backplane และ shared store** แล้วเก็บ stickiness ไว้ใช้เฉพาะกรณีที่การสร้าง state ต่อ client ขึ้นใหม่ทุกครั้งที่ reconnect แพงจริง ๆ
 
 | Approach | State ต่อ client | Deploy | ต้องการ Backplane |
 |---|---|---|---|
 | Sticky Session | อยู่ใน instance memory | ปั่นป่วน — client ของ instance ที่ restart หลุด | ใช่ — สำหรับ cross-instance |
 | Stateless | อยู่ใน shared store | ราบรื่น — instance ใดก็ได้ serve ได้ | ใช่ — เสมอ |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ใช้ IP Hash Sticky Session กับ Mobile Client**
 อาการ:
@@ -106,7 +106,7 @@ location /ws {
 - user ที่ idle (ไม่พิมพ์) โดน disconnect โดยไม่รู้ตัว
 - ตั้ง `proxy_read_timeout 3600s` และ implement heartbeat ฝั่ง client
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Slack:**
 > - ใช้ sticky session สำหรับ RTM API — client ถูก pin ไว้กับ gateway instance
@@ -125,7 +125,7 @@ export const quizSticky = [
     q: 'load balancer ต้องทำอะไรเพื่อให้ WebSocket handshake สำเร็จ?',
     options: [
       'บีบอัด request body',
-      'forward header Connection: Upgrade และ Upgrade: websocket แทนที่จะปิดมันเหมือน HTTP ธรรมดา',
+      'forward header Connection: Upgrade และ Upgrade: websocket แทนที่จะปิด connection เหมือน HTTP ธรรมดา',
       'เพิ่ม Content-Length header',
       'แปลง request เป็น HTTP/2',
     ],
@@ -134,10 +134,10 @@ export const quizSticky = [
   {
     q: 'ทำไม stateless instance จึงมักจะ deploy และ rebalance ได้ง่ายกว่า sticky?',
     options: [
-      'มันใช้ CPU ต่อข้อความน้อยกว่า',
-      'เพราะไม่มี instance ใดถือ state ต่อ client ที่มีความสำคัญ balancer จึงสามารถ route connection ใดก็ได้ไปที่ไหนก็ได้',
-      'มันไม่ต้องการ backplane',
-      'มันเก็บ client ทั้งหมดไว้บน instance เดียว',
+      'ใช้ CPU ต่อ message น้อยกว่า',
+      'เพราะไม่มี instance ใดถือ state ต่อ client ที่สำคัญไว้ balancer จึง route connection ใดก็ได้ไปที่ไหนก็ได้',
+      'ไม่ต้องใช้ backplane',
+      'เก็บ client ทั้งหมดไว้บน instance เดียว',
     ],
     answer: 1,
   },
@@ -145,8 +145,8 @@ export const quizSticky = [
     q: 'ทำไมจึงยังต้องการ backplane แม้ว่าคุณจะใช้ sticky session?',
     options: [
       'stickiness ปิดการ broadcast ทั้งหมด',
-      'stickiness เพียง route client กลับไปยัง instance ของมันเอง มันไม่เคยปล่อยให้ instance หนึ่งไปถึง client บนอีกตัว',
-      'sticky session เก็บข้อความไว้ใน cookie',
+      'stickiness แค่ route client กลับไปยัง instance เดิม ไม่เคยทำให้ instance หนึ่งไปถึง client บนอีกตัวได้',
+      'sticky session เก็บ message ไว้ใน cookie',
       'backplane มาแทนที่ load balancer',
     ],
     answer: 1,

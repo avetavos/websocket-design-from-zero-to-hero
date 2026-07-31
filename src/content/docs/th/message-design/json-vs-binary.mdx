@@ -17,14 +17,14 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 `JSON.stringify` และ `JSON.parse` ถูกฝังอยู่ในทุกเบราว์เซอร์และทุก server runtime JSON นั้น **อธิบายตัวเองได้ (self-describing)** (ชื่อ field เดินทางไปพร้อมกับข้อมูล) มนุษย์อ่านได้ใน network inspector และทุกภาษาเข้าใจได้โดยไม่ต้องมีขั้น build สำหรับแอปพลิเคชันส่วนใหญ่อย่างท่วมท้น — chat, dashboards, notifications, การแก้ไขร่วมกัน — JSON คือค่าเริ่มต้นที่ถูกต้อง คุณอ่าน message ได้ในพริบตา และการรับ client ใหม่เข้ามาก็แค่ตกลงกันเรื่องชื่อ field เท่านั้น ไม่มีอะไรมากกว่านั้น
 
-ต้นทุนของมันก็มีจริงไม่แพ้กัน ชื่อ field ถูกทำซ้ำใน *ทุก* message ตัวเลขถูกเก็บเป็น text เลขฐานสิบ และไม่มี type ดั้งเดิมสำหรับ bytes ดิบ position update อย่าง `{"x":12,"y":48}` ใช้ bytes ส่วนใหญ่ไปกับ quotes, braces และตัวอักษร `x` กับ `y` มากกว่าค่าจริง
+ต้นทุนก็มีจริงไม่แพ้กัน ชื่อ field ซ้ำอยู่ใน *ทุก* message ตัวเลขเก็บเป็น text ฐานสิบ และไม่มี type ดั้งเดิมสำหรับ bytes ดิบ position update อย่าง `{"x":12,"y":48}` ใช้ bytes ส่วนใหญ่ไปกับ quotes, braces และตัวอักษร `x` กับ `y` มากกว่าค่าจริง
 
 ## Binary: กระชับและเร็ว
 
 format การ serialize แบบ binary แลกความอ่านได้กับความหนาแน่น:
 
 - **MessagePack** — "JSON แต่เป็น binary" data model เดียวกัน (objects, arrays, numbers, strings) ไม่มี schema เหมือน JSON แต่ encode อย่างกระชับ มักเป็นการอัปเกรดจาก JSON ที่ง่ายที่สุด
-- **Protocol Buffers (Protobuf)** — schema-*first* คุณประกาศรูปร่าง message ในไฟล์ `.proto` *ชื่อ* field ไม่เคยเดินทางบน wire (มีแค่ numeric tags เล็ก ๆ เท่านั้น) ทำให้มันกระชับที่สุดและ parse ได้เร็วที่สุด โดยแลกกับขั้น code-generation และความยืดหยุ่นแบบ ad-hoc ที่น้อยลง
+- **Protocol Buffers (Protobuf)** — schema-*first* คุณประกาศรูปร่าง message ในไฟล์ `.proto` *ชื่อ* field ไม่เคยเดินทางบน wire (มีแค่ numeric tag เล็ก ๆ เท่านั้น) จึงกระชับที่สุดและ parse เร็วที่สุด แลกมากับขั้น code-generation และความยืดหยุ่นแบบ ad-hoc ที่น้อยลง
 - **CBOR** — format แบบ binary มาตรฐาน IETF (RFC 8949) ในตระกูล MessagePack พบได้ทั่วไปใน IoT และสภาพแวดล้อมที่มีข้อจำกัด
 
 สิ่งเหล่านี้เปล่งประกายเมื่อ message **เล็ก ถี่ และมีปริมาณสูง**: สถานะเกม multiplayer ที่ 60 อัปเดตต่อวินาที, market data feed, telemetry จาก sensor หลายพันตัว การเฉือน bytes และเวลา parse ต่อ message สะสมเพิ่มขึ้นอย่างรวดเร็ว
@@ -47,13 +47,13 @@ export const tradeoffDiagram = `flowchart LR
 
 หลักคิดเชิงปฏิบัติ:
 
-- **ตั้งค่าเริ่มต้นเป็น JSON** หยิบมันมาใช้จนกว่าคุณจะวัดได้ว่ามีปัญหาจริง ความอ่านได้และการไม่ต้องมี tooling นั้นมีค่ามาก และแอปส่วนใหญ่ยังห่างไกลจากขีดจำกัด bandwidth หรือ CPU ที่การ encode จะมีความสำคัญ
+- **ตั้งค่าเริ่มต้นเป็น JSON** ใช้ไปก่อนจนกว่าจะวัดได้ว่ามีปัญหาจริง ความอ่านง่ายและการไม่ต้องมี tooling มีค่ามาก และแอปส่วนใหญ่ยังห่างจากขีดจำกัด bandwidth หรือ CPU ที่รูปแบบ encode จะเริ่มมีผลอยู่อีกไกล
 - **เปลี่ยนเป็น binary เมื่อตัวเลขเรียกร้อง** — อัตรา message สูง, payload ใหญ่, mobile client บนข้อมูลที่คิดค่าตามปริมาณ หรือ budget latency ที่เข้มงวด วัดก่อน profiler ชนะการคาดเดาเสมอ
 - **คุณผสมกันได้** ส่ง message ควบคุม/ตั้งค่าเป็น JSON เพื่อความชัดเจน และส่งสตรีมร้อนความถี่สูงเป็น binary วินัย field `type` จากบทเรียนที่แล้วใช้ได้กับ encoding ทั้งสองแบบ
 
 ## เดโม JSON และรูปร่างของ binary ในcode
 
-เดโมที่รันได้ด้านล่างส่ง JSON message และรายงานขนาดของมันบน wire — สัมผัสดูว่าโครงสร้างเองกินไปกี่ bytes มันใช้ `WebSocket` API จริงบน echo socket ภายในหน้า
+เดโมที่รันได้ด้านล่างส่ง JSON message แล้วรายงานขนาดจริงบน wire — ให้เห็นกับตาว่าโครงสร้างเองกินไปกี่ bytes โดยใช้ `WebSocket` API จริงบน echo socket ภายในหน้า
 
 export const jsonSizeCode = `(function () {
   // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
@@ -88,7 +88,7 @@ export const jsonSizeCode = `(function () {
 
 <NodeRunner client:visible code={jsonSizeCode} />
 
-ในการตั้งค่า binary จริง คุณจะ encode *object เดียวกัน* ด้วย library ก่อนส่งมันเป็น binary frame ด้วย MessagePack รูปร่างจะหน้าตาแบบนี้ — สังเกต binary frame และ receive type ที่เป็น `arraybuffer`:
+ในการตั้งค่า binary จริง คุณจะ encode *object เดียวกัน* ด้วย library ก่อนส่งออกเป็น binary frame ถ้าใช้ MessagePack รูปร่างจะหน้าตาแบบนี้ — สังเกต binary frame และ receive type ที่เป็น `arraybuffer`:
 
 ```ts
 import { encode, decode } from '@msgpack/msgpack';
@@ -119,7 +119,7 @@ ws.onmessage = (event: MessageEvent) => {
 | Protobuf | เล็กที่สุด, schema-first | ต้อง .proto + generated code | build step |
 | CBOR | เล็กกว่า JSON, IETF standard | ต้อง decode | library |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **เปลี่ยนเป็น Binary ก่อนวัด Performance**
 อาการ:
@@ -133,7 +133,7 @@ ws.onmessage = (event: MessageEvent) => {
 - `onmessage` ต้อง guess ว่า frame ไหนเป็น format อะไร
 - กำหนด convention ชัดเจน: control message = JSON, data stream = binary
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Binance WebSocket Streams:**
 > - ใช้ JSON สำหรับ subscription management
@@ -151,30 +151,30 @@ export const quizJsonBinary = [
   {
     q: 'อะไรคือเหตุผลที่หนักแน่นที่สุดในการตั้งค่าเริ่มต้นเป็น JSON สำหรับ WebSocket message?',
     options: [
-      'มันเล็กกว่า binary บน wire เสมอ',
-      'มันอ่านได้ ใช้ได้ทุกที่ และไม่ต้องมี tooling หรือขั้น build',
+      'เล็กกว่า binary บน wire เสมอ',
+      'อ่านออก ใช้ได้ทุกที่ และไม่ต้องมี tooling หรือขั้น build',
       'WebSocket ส่ง binary frame ไม่ได้',
-      'มัน parse เร็วกว่า binary format ใด ๆ',
+      'parse เร็วกว่า binary format ทุกตัว',
     ],
     answer: 1,
   },
   {
-    q: 'เมื่อไรที่ format แบบ binary ที่กระชับจึงคุ้มต้นทุนของมันได้ชัดเจนที่สุด?',
+    q: 'เมื่อไรที่ format แบบ binary ที่กระชับจึงคุ้มต้นทุนชัดเจนที่สุด?',
     options: [
       'สำหรับ message ตั้งค่าที่ใหญ่และไม่ค่อยเกิดเพียงไม่กี่อัน',
-      'สำหรับสตรีมที่เล็ก ถี่ ปริมาณสูง ซึ่ง bytes และเวลา parse ต่อ message สะสมเพิ่มขึ้น',
+      'สำหรับ stream ที่เล็ก ถี่ ปริมาณสูง ซึ่ง bytes และเวลา parse ต่อ message สะสมเพิ่มขึ้น',
       'เมื่อใดก็ตามที่ข้อมูลมี string',
       'เฉพาะเมื่อ server เขียนด้วยภาษา C เท่านั้น',
     ],
     answer: 1,
   },
   {
-    q: 'ในcode MessagePack ทำไมต้องตั้ง ws.binaryType = "arraybuffer"?',
+    q: 'ใน code MessagePack ทำไมต้องตั้ง ws.binaryType = "arraybuffer"?',
     options: [
       'เพื่อบีบอัด JSON อัตโนมัติ',
       'เพื่อให้ binary message มาถึงในรูป ArrayBuffer ที่ decoder อ่านได้ แทนที่จะเป็น Blob',
-      'มันสลับ connection ไปยัง port อื่น',
-      'มันจำเป็นสำหรับ JSON message ทุกอันด้วย',
+      'สลับ connection ไปยัง port อื่น',
+      'จำเป็นสำหรับ JSON message ทุกอันด้วย',
     ],
     answer: 1,
   },

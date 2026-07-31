@@ -15,7 +15,7 @@ WebSocket ที่เปิดอยู่คือคำเชิญที่�
 
 ## client ถล่มคุณได้
 
-ไม่มี throttle ในตัวบน WebSocket ลูป `while (true) ws.send(...)` ในเบราว์เซอร์จะยิง frame หลายพันต่อวินาทีไปที่ server ของคุณ แต่ละอันปลุก event loop ของคุณ, allocate, parse, และรัน handler ของคุณ คูณด้วยจำนวน client ที่เชื่อมต่ออยู่ และ peer ที่ใช้งานในทางที่ผิดเพียงตัวเดียวก็ทำให้ CPU อิ่มตัว, ทำให้ memory หมด, หรือยัดงานเข้า loop มากเสียจน message ของ *ทุก client อื่น* ถูกหน่วง คุณต้องการเพดาน และมันต้องเป็น **ราย connection** เพื่อที่พฤติกรรมแย่ ๆ ของ client หนึ่งจะกินงบของทุกคนอื่นไม่ได้
+WebSocket ไม่มี throttle มาให้ในตัว loop `while (true) ws.send(...)` ในเบราว์เซอร์ยิง frame ได้หลายพันตัวต่อวินาที แต่ละตัวปลุก event loop, allocate, parse แล้วรัน handler ของคุณ คูณด้วยจำนวน client ที่เชื่อมต่ออยู่ แค่ peer ที่ประสงค์ร้ายตัวเดียวก็ทำ CPU อิ่มตัว memory หมด หรือยัดงานเข้า loop จนหน่วง message ของ *client คนอื่นทุกคน* ได้ คุณจึงต้องมีเพดาน และเพดานนั้นต้องเป็น **ราย connection** เพื่อไม่ให้ client เจ้าปัญหาตัวเดียวกินงบของคนอื่นไปหมด
 
 ## Token bucket: rate limit ที่ยอมให้มี burst
 
@@ -36,13 +36,13 @@ export const bucketDiagram = `flowchart TB
 
 Rate limiting จำกัด *จำนวนเท่าไร*; validation จำกัด *อะไร* จงมองทุก frame ที่เข้ามาว่าเป็นศัตรูจนกว่าจะพิสูจน์ได้ว่าไม่ใช่:
 
-- **จำกัดขนาดก่อน** ปฏิเสธ frame ที่ใหญ่กว่าลิมิตที่สมเหตุสมผล (ไม่กี่ KB สำหรับ chat, มากกว่านั้นสำหรับ payload ที่รู้จัก) **ก่อน** ที่คุณจะ parse มัน WebSocket library ส่วนใหญ่ให้คุณตั้ง `maxPayload` ได้ เพื่อที่ frame ที่ใหญ่เกินจะถูกปฏิเสธในระดับ protocol — ใช้มัน แล้วตรวจซ้ำใน handler ของคุณ
-- **Parse ใน `try/catch`** การ `JSON.parse` บน input ของผู้โจมตี *จะ* throw ในที่สุด จับมัน; อย่าปล่อยให้ frame ที่ผิดรูปทำให้การเชื่อมต่อหรือ process crash
+- **จำกัดขนาดก่อน** ปฏิเสธ frame ที่ใหญ่กว่าลิมิตที่สมเหตุสมผล (ไม่กี่ KB สำหรับ chat, มากกว่านั้นสำหรับ payload ที่รู้จัก) **ก่อน** ลงมือ parse WebSocket library ส่วนใหญ่ให้ตั้ง `maxPayload` ได้ frame ที่ใหญ่เกินจะโดนปฏิเสธตั้งแต่ระดับ protocol — ตั้งค่านี้ไว้ แล้วตรวจซ้ำอีกทีใน handler ของคุณ
+- **Parse ใน `try/catch`** การ `JSON.parse` บน input ของผู้โจมตี *ต้อง* throw สักวัน ดักไว้ให้หมด อย่าปล่อยให้ frame ที่ผิดรูปทำการเชื่อมต่อหรือ process crash
 - **Validate รูปร่าง** ยืนยันว่า `type` เป็น string ที่รู้จัก, field ที่จำเป็นมีอยู่และมี type ถูกต้อง, string อยู่ในความยาว, number อยู่ในช่วง ปฏิเสธอะไรก็ตามที่ไม่ตรงกับรูปร่าง message ที่รู้จัก — อย่า "พยายามเต็มที่" ฝ่าขยะไป
 
 ## เดโม token-bucket และ validation ที่รันได้จริง
 
-เพราะ rate limiting เป็น logic ล้วน ๆ เดโมด้านล่างจึงรัน **ในหน้าเว็บ** — ไม่ต้องใช้ server มันimplement token bucket และ validator แบบระแวดระวัง จากนั้น replay burst ของ message (บางอันถูกต้อง, บางอันผิดรูป, บางอันใหญ่เกิน) แล้วแสดงว่าอันไหนถูกยอมรับ, ถูก throttle, หรือถูกปฏิเสธ ฟังก์ชัน `consume()` และ `validate()` เดียวกันนี้หย่อนลงใน `ws.on('message')` handler จริงได้ทันที
+เพราะ rate limiting เป็น logic ล้วน ๆ เดโมด้านล่างจึงรัน **ในหน้าเว็บ** — ไม่ต้องใช้ server โดย implement token bucket กับ validator แบบระแวดระวัง จากนั้น replay burst ของ message (บางอันถูกต้อง, บางอันผิดรูป, บางอันใหญ่เกิน) แล้วแสดงว่าอันไหนถูกยอมรับ, ถูก throttle, หรือถูกปฏิเสธ ฟังก์ชัน `consume()` และ `validate()` เดียวกันนี้หย่อนลงใน `ws.on('message')` handler จริงได้ทันที
 
 export const bucketDemoCode = `(function () {
   // --- Token bucket: capacity 5, refill 2 tokens/sec ---
@@ -95,7 +95,7 @@ export const bucketDemoCode = `(function () {
 
 <NodeRunner client:visible code={bucketDemoCode} />
 
-รันมันแล้วอ่านคำตัดสิน: frame ที่ผิดรูป, ใหญ่เกิน, และ type ที่ไม่รู้จัก ถูก **ปฏิเสธ** โดย validator และเมื่อ burst ทำให้ bucket ห้า token หมด frame ที่ตามมาจะถูก **throttle** ไม่ว่าเนื้อหาจะเป็นอย่างไร การ์ดสองอันที่เป็นอิสระต่อกัน — อันหนึ่งคุม *rate*, อันหนึ่งคุม *รูปร่าง* — และการเชื่อมต่อเดียวจะถล่มหรือทำให้ server สับสนไม่ได้อีกต่อไป
+ลองรันแล้วอ่านคำตัดสิน: frame ที่ผิดรูป ใหญ่เกิน และ type ที่ไม่รู้จัก จะโดน validator **ปฏิเสธ** และเมื่อ burst ดูด bucket ห้า token จนหมด frame ที่ตามมาก็โดน **throttle** ไม่ว่าเนื้อหาจะเป็นอย่างไร การ์ดสองอันที่เป็นอิสระต่อกัน — อันหนึ่งคุม *rate*, อันหนึ่งคุม *รูปร่าง* — และการเชื่อมต่อเดียวจะถล่มหรือทำให้ server สับสนไม่ได้อีกต่อไป
 
 | Rate Limit Type | จำกัดอะไร | เหมาะกับ |
 |---|---|---|
@@ -104,7 +104,7 @@ export const bucketDemoCode = `(function () {
 | Payload size | ขนาด message สูงสุด | ป้องกัน memory exhaustion |
 | Room join rate | join room ต่อวินาที | ป้องกัน room flooding |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ไม่มี Payload Size Limit**
 อาการ:
@@ -118,7 +118,7 @@ export const bucketDemoCode = `(function () {
 - malformed message ทำให้ consumer crash
 - ใช้ Zod หรือ JSON Schema validate ทุก message ที่รับ ก่อน process
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Discord:**
 > - rate limit message: 5 message ต่อ 5 วินาทีต่อ user
@@ -136,10 +136,10 @@ export const quizRate = [
   {
     q: 'คุณสมบัติอะไรทำให้ token bucket เหมาะกับ traffic แบบแชท?',
     options: [
-      'มันบล็อก burst ทั้งหมดและบังคับ rate ให้คงที่เป๊ะ',
-      'มันยอมให้ burst สั้น ๆ ได้ถึง capacity ของ bucket แล้วค่อยจำกัด rate ต่อเนื่องไว้ที่ refill rate',
-      'มันไม่เคยปฏิเสธ message ใดเลย',
-      'มันจำกัด rate แบบ global แทนที่จะเป็นราย connection',
+      'บล็อก burst ทั้งหมดและบังคับ rate ให้คงที่เป๊ะ',
+      'ยอมให้ burst สั้น ๆ ได้ถึง capacity ของ bucket แล้วค่อยจำกัด rate ต่อเนื่องไว้ที่ refill rate',
+      'ไม่เคยปฏิเสธ message ใดเลย',
+      'จำกัด rate แบบ global แทนที่จะเป็นราย connection',
     ],
     answer: 1,
   },
@@ -156,9 +156,9 @@ export const quizRate = [
   {
     q: 'วิธีที่ปลอดภัยในการจัดการ JSON message frame ที่เข้ามาคืออะไร?',
     options: [
-      'parse มันตรง ๆ แล้วเชื่อ field ที่ได้',
-      'จำกัดขนาดมัน parse ใน try/catch แล้ว validate type และรูปร่างของ field ก่อนนำไปใช้',
-      'เช็คแค่ว่ามันเป็น JSON ที่ถูกต้อง',
+      'parse ตรง ๆ แล้วเชื่อ field ที่ได้เลย',
+      'จำกัดขนาดก่อน parse ใน try/catch แล้ว validate type และรูปร่างของ field ก่อนนำไปใช้',
+      'เช็คแค่ว่าเป็น JSON ที่ถูกต้องหรือไม่',
       'ปฏิเสธทุก message ที่ไม่ว่างเปล่า',
     ],
     answer: 1,

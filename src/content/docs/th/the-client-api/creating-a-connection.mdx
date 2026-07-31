@@ -25,7 +25,7 @@ const ws = new WebSocket(url, protocols);
 
 ## ws กับ wss
 
-WebSocket URL ไม่เคยใช้ `http` มันใช้หนึ่งในสอง scheme เฉพาะทาง:
+WebSocket URL ไม่เคยใช้ `http` แต่ใช้หนึ่งในสอง scheme เฉพาะทาง:
 
 - **`ws://`** — การเชื่อมต่อแบบไม่เข้ารหัส ไบต์เดินทางแบบเปิดเผย เหมือน `http://` ธรรมดาทุกประการ
 - **`wss://`** — โปรโตคอลเดียวกันที่ห่อด้วย TLS เหมือน `https://` ทุกประการ เข้ารหัส ยืนยันตัวตน และแก้ไขดัดแปลงได้ยากกว่ามาก
@@ -39,7 +39,7 @@ const prod = new WebSocket('wss://chat.example.com');  // always this in product
 
 ## Subprotocol
 
-อาร์กิวเมนต์ที่สองซึ่งเป็นทางเลือกช่วยให้ client และ server ตกลงกันว่า *จะพูดโปรโตคอลระดับแอปพลิเคชันตัวไหน* บน socket — คิดเสียว่ามันคือการเลือกภาษากลางก่อนเริ่มบทสนทนา เบราว์เซอร์ส่งลิสต์ของคุณไป server เลือก **หนึ่งตัว** และตัวเลือกนั้นจะส่งกลับมาที่ `ws.protocol` เมื่อการเชื่อมต่อเปิดขึ้น
+argument ตัวที่สองซึ่งใส่หรือไม่ใส่ก็ได้ ช่วยให้ client กับ server ตกลงกันว่า *จะพูด protocol ระดับ application ตัวไหน* บน socket — เหมือนเลือกภาษากลางก่อนเริ่มบทสนทนา เบราว์เซอร์ส่งลิสต์ของคุณไป server เลือกมา **หนึ่งตัว** แล้วตัวที่เลือกจะกลับมาอยู่ใน `ws.protocol` ตอนการเชื่อมต่อเปิด
 
 ```ts
 const ws = new WebSocket('wss://example.com', ['chat.v2', 'chat.v1']);
@@ -48,11 +48,11 @@ ws.onopen = () => {
 };
 ```
 
-คุณเรียงลิสต์ตามลำดับความชอบ server ถูกคาดหวังให้เคารพลำดับนั้น ถ้า server ไม่รองรับสักตัว มันควรปฏิเสธการเชื่อมต่อ subprotocol เป็นทางเลือก — หลายแอปไม่เคยใช้เลย — แต่มันคือวิธีที่สะอาดในการกำหนดเวอร์ชันของรูปแบบข้อมูลบนสาย
+คุณเรียงลิสต์ตามลำดับความชอบ และ server ควรเคารพลำดับนั้น ถ้า server ไม่รองรับสักตัว ก็ควรปฏิเสธการเชื่อมต่อไปเลย subprotocol จะใส่หรือไม่ใส่ก็ได้ — หลายแอปไม่เคยใช้เลย — แต่เป็นวิธีที่สะอาดในการกำหนดเวอร์ชันของรูปแบบข้อมูลบนสาย
 
-## เกิดอะไรขึ้นในวินาทีที่คุณสร้างมัน
+## เกิดอะไรขึ้นในวินาทีที่คุณสร้าง socket
 
-การเรียก `new WebSocket(url)` **ไม่** บล็อก มันคืนค่าทันทีโดยออบเจกต์อยู่ในสถานะ `CONNECTING` ขณะที่ handshake ทำงานอยู่เบื้องหลัง ไดอะแกรมนี้ตามรอยช่วงเวลาแรก ๆ เหล่านั้น:
+การเรียก `new WebSocket(url)` **ไม่** บล็อก แต่คืนค่าทันทีโดย object อยู่ในสถานะ `CONNECTING` ระหว่างที่ handshake ทำงานอยู่เบื้องหลัง ไดอะแกรมนี้ตามรอยช่วงเวลาแรก ๆ เหล่านั้น:
 
 <Mermaid title="จากการสร้างจนถึง open" code={constructDiagram} />
 
@@ -72,7 +72,7 @@ export const constructDiagram = `sequenceDiagram
 
 ## การเชื่อมต่อที่ทำงานจริง
 
-เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server มันเลียนแบบ constructor แบบสองอาร์กิวเมนต์และรายงาน `protocol` ที่เจรจาได้ ในแอปจริงคุณจะเขียน `new WebSocket('wss://your-server', ['chat.v2'])` และไม่มีอะไรอื่นเปลี่ยน
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server ตัวเดโมเลียนแบบ constructor แบบสอง argument และรายงาน `protocol` ที่เจรจาได้ ในแอปจริงคุณจะเขียน `new WebSocket('wss://your-server', ['chat.v2'])` และไม่มีอะไรอื่นเปลี่ยน
 
 export const createEchoCode = `(function () {
   // In-page echo socket with the same API as a real WebSocket.
@@ -109,14 +109,14 @@ export const createEchoCode = `(function () {
 
 ล็อกแรกพิสูจน์ว่าการสร้างคืนค่ามาโดย `readyState` ยังเป็น `0` อยู่ ต่อมาภายใน `onopen` เท่านั้นการเชื่อมต่อจึงใช้งานได้ — และ subprotocol ที่เจรจาได้ก็พร้อมใช้ตรงนั้นในรูปของ `ws.protocol`
 
-| Benefits (Browser WebSocket API) | Trade-offs |
+| ข้อดี (Browser WebSocket API) | ข้อแลกเปลี่ยน |
 |---|---|
 | built-in browser API — ไม่ต้อง install library | API เรียบง่าย แต่ไม่มี reconnect built-in |
 | ทำงานบน HTTP/HTTPS port เดิม (80/443) | ไม่มี message queue — ส่งขณะ connecting fail |
 | `ws://` และ `wss://` — TLS ใน URL | ไม่มี timeout built-in — ต้อง implement เอง |
 | event-based — ไม่ block main thread | `send()` ขณะ readyState ไม่ใช่ OPEN throw error |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ส่ง Message ก่อน Connection OPEN**
 อาการ:
@@ -130,7 +130,7 @@ export const createEchoCode = `(function () {
 - connection fail โดยไม่รู้สาเหตุ — UX แย่
 - implement `onerror` และ `onclose` ที่ log error และ trigger reconnect
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Discord Web App:**
 > - `new WebSocket('wss://gateway.discord.gg/?v=10')` ตอน app load
@@ -156,22 +156,22 @@ export const quizCreate = [
     answer: 2,
   },
   {
-    q: 'จุดประสงค์ของอาร์กิวเมนต์ตัวที่สองซึ่งเป็นทางเลือกของ constructor คืออะไร?',
+    q: 'จุดประสงค์ของอาร์กิวเมนต์ตัวที่สองที่เป็นทางเลือกของ constructor คืออะไร?',
     options: [
-      'มันตั้งค่า timeout ของการเชื่อมต่อ',
-      'มันระบุ subprotocol เพื่อให้ client และ server ตกลงกันบน application protocol ตัวเดียว',
-      'มันเลือกพอร์ต TCP',
-      'มันเปิดโหมด binary',
+      'ตั้งค่า timeout ของการเชื่อมต่อ',
+      'ระบุ subprotocol เพื่อให้ client และ server ตกลงกันบน application protocol ตัวเดียว',
+      'เลือกพอร์ต TCP',
+      'เปิดโหมด binary',
     ],
     answer: 1,
   },
   {
-    q: 'ออบเจกต์อยู่ในสถานะใดทันทีหลังจาก new WebSocket(url) คืนค่า?',
+    q: 'object อยู่ในสถานะใดทันทีหลังจาก new WebSocket(url) คืนค่า?',
     options: [
       'OPEN — พร้อมส่งได้เลย',
       'CONNECTING — handshake ทำงานอยู่เบื้องหลัง',
       'CLOSED จนกว่าคุณจะเรียก connect()',
-      'มันบล็อกจนกว่าจะเชื่อมต่อ',
+      'บล็อกค้างไว้จนกว่าจะเชื่อมต่อสำเร็จ',
     ],
     answer: 1,
   },

@@ -11,7 +11,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-มีของขวัญละเอียดอ่อนชิ้นหนึ่งที่ WebSocket protocol มอบให้คุณ และมีกับดักละเอียดอ่อนอยู่ข้าง ๆ มันด้วย ของขวัญคือ **message มาถึงครบทั้งก้อน** ส่วนกับดักคือการเชื่อว่าครบทั้งก้อนแปลว่า *มีความหมาย* บทเรียนนี้ว่าด้วยช่องว่างระหว่างสองสิ่งนั้น
+มีของขวัญละเอียดอ่อนชิ้นหนึ่งที่ WebSocket protocol มอบให้คุณ และมีกับดักละเอียดอ่อนอยู่ข้าง ๆ กันด้วย ของขวัญคือ **message มาถึงครบทั้งก้อน** ส่วนกับดักคือการเชื่อว่าครบทั้งก้อนแปลว่า *มีความหมาย* บทเรียนนี้ว่าด้วยช่องว่างระหว่างสองสิ่งนั้น
 
 ## TCP ดิบ ๆ ไม่มี message — แต่ WebSocket มี
 
@@ -33,11 +33,11 @@ export const framingDiagram = `flowchart TB
     w2 --> w3["boundaries already correct"]
   end`;
 
-ดังนั้นปัญหา framing ระดับล่าง — *message จบตรงไหน* — หายไปแล้ว วิเศษมาก แต่นั่นบอกเพียงว่า **bytes** ถูกจัดกลุ่มอย่างถูกต้อง มันไม่ได้บอกเลยว่า bytes ที่ถูกจัดกลุ่มเหล่านั้น *มีความหมายอะไร*
+ดังนั้นปัญหา framing ระดับล่าง — *message จบตรงไหน* — หายไปแล้ว วิเศษมาก แต่นั่นบอกเพียงว่า **bytes** ถูกจัดกลุ่มอย่างถูกต้อง ไม่ได้บอกเลยว่า bytes ที่ถูกจัดกลุ่มเหล่านั้น *มีความหมายอะไร*
 
 ## คุณยังต้องมี application protocol
 
-นี่คือกับดัก เพราะ message มาถึงครบทั้งก้อน จึงมีแรงดึงดูดให้แค่ `send('user joined: bob')` แล้วถือว่าเสร็จ มันได้ผล — สำหรับ message เพียงชนิดเดียวเท่านั้น ทันทีที่คุณมีชนิดที่สอง ("user left", "new message", "typing…") ฝั่งรับของคุณก็ถูกลดทอนลงเหลือเพียงการดมกลิ่น string อย่างเปราะบาง: *มันขึ้นต้นด้วย "user joined" ไหม? มันมี colon ไหม?* นั่นคือ parser ที่คุณกำลังเขียนด้วยมือโดยไม่ตั้งใจ และเขียนได้แย่ด้วย
+นี่คือกับดัก เพราะ message มาถึงครบทั้งก้อน จึงมีแรงดึงดูดให้แค่ `send('user joined: bob')` แล้วถือว่าเสร็จ วิธีนี้ได้ผล — สำหรับ message เพียงชนิดเดียวเท่านั้น ทันทีที่คุณมีชนิดที่สอง ("user left", "new message", "typing…") ฝั่งรับของคุณก็ถูกลดทอนลงเหลือเพียงการดมกลิ่น string อย่างเปราะบาง: *string นี้ขึ้นต้นด้วย "user joined" ไหม? มี colon ไหม?* นั่นคือ parser ที่คุณกำลังเขียนด้วยมือโดยไม่ตั้งใจ และเขียนได้แย่ด้วย
 
 วินัยที่ขยายตัวได้นั้นเรียบง่ายและคุ้มค่าที่จะจดจำ:
 
@@ -49,7 +49,7 @@ export const framingDiagram = `flowchart TB
 
 ## เดโม message ที่มีโครงสร้าง
 
-เดโมส่ง message *ชนิด* ต่าง ๆ สามชนิดผ่าน connection เดียว แต่ละอันเป็น JSON object หนึ่งอันที่มี `type` และฝั่งรับ dispatch ตาม type นั้น — ไม่มีการดมกลิ่น string ที่ใดเลย มันรันในเบราว์เซอร์ของคุณบน echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง
+เดโมส่ง message *ชนิด* ต่าง ๆ สามชนิดผ่าน connection เดียว แต่ละอันเป็น JSON object หนึ่งอันที่มี `type` และฝั่งรับ dispatch ตาม type นั้น — ไม่มีการดมกลิ่น string ที่ใดเลย เดโมรันในเบราว์เซอร์ของคุณบน echo socket ภายในหน้าที่ใช้ `WebSocket` API จริง
 
 export const framingCode = `(function () {
   // In-page echo socket with the real WebSocket API. Real app: new WebSocket('wss://your-server').
@@ -101,7 +101,7 @@ export const framingCode = `(function () {
 | String-based (no structure) | ง่าย debug | fragile, ไม่ scale เมื่อ message types เพิ่ม |
 | Binary framing (Protobuf/MessagePack) | compact, เร็ว | ต้องมี schema, ไม่ human-readable |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ยัด Message หลายอันใน send() เดียว**
 อาการ:
@@ -115,7 +115,7 @@ export const framingCode = `(function () {
 - message format เปลี่ยนนิดเดียว → ทุก handler พัง
 - ใส่ `type` field ทุก message แล้ว dispatch ตามนั้น
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Slack RTM API:**
 > - ทุก message มี `type` field: `"type": "message"`, `"type": "user_typing"`, `"type": "presence_change"`
@@ -146,7 +146,7 @@ export const quizFraming = [
       'เพื่อแยก message ที่ TCP รวมเข้าด้วยกันออกใหม่',
       'เพราะ bytes ครบก้อนยังไม่มีความหมายที่ตกลงกันไว้ — คุณต้องมี types และ field ที่มีชื่อเพื่อจัดการ message มากกว่าหนึ่งชนิด',
       'เพราะ onmessage ทำงานมากกว่าหนึ่งครั้งต่อหนึ่ง message',
-      'มันจำเป็นเฉพาะกับ binary frame เท่านั้น',
+      'จำเป็นเฉพาะกับ binary frame เท่านั้น',
     ],
     answer: 1,
   },
@@ -155,7 +155,7 @@ export const quizFraming = [
     options: [
       'อัด message เชิงตรรกะหลายอันเข้าไปใน send เดียวเพื่อประหยัด bandwidth',
       'หนึ่ง JSON object ต่อหนึ่ง message แต่ละอันมี field type ที่ฝั่งรับ dispatch ตาม',
-      'ใช้ string เปล่า ๆ คั่นด้วย newline แล้วดมกลิ่นจาก prefix ของมัน',
+      'ใช้ string เปล่า ๆ คั่นด้วย newline แล้วดมกลิ่นจาก prefix ของตัวเอง',
       'แยกแต่ละ message ออกเป็นหลาย ๆ send',
     ],
     answer: 1,

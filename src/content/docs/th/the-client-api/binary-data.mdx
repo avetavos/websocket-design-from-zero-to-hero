@@ -17,8 +17,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ในระดับโปรโตคอล ทุกข้อความ WebSocket เป็นได้ทั้ง **text** frame หรือ **binary** frame:
 
-- **text** frame พก text ที่เข้ารหัสแบบ UTF-8 คุณสร้างมันโดยส่งสตริงเข้า `send()` และรับมันกลับมาเป็นสตริง
-- **binary** frame พกไบต์ดิบโดยไม่มีสมมติฐานเรื่องการเข้ารหัส คุณสร้างมันโดยส่ง binary data เข้า `send()`
+- **text** frame พก text ที่เข้ารหัสแบบ UTF-8 คุณสร้าง frame ชนิดนี้โดยส่งสตริงเข้า `send()` และรับกลับมาเป็นสตริง
+- **binary** frame พกไบต์ดิบโดยไม่มีสมมติฐานเรื่องการเข้ารหัส คุณสร้าง frame ชนิดนี้โดยส่ง binary data เข้า `send()`
 
 ฝั่งรับจะถูกบอกว่า frame นั้นเป็นชนิดใด จึงไม่มีวันกำกวมระหว่าง "สตริงสี่ตัวอักษร 1234" กับ "สี่ไบต์ดิบ" คุณเลือกรสชาติเพียงแค่ดูจากสิ่งที่คุณส่งเข้า `send()`
 
@@ -52,7 +52,7 @@ ws.binaryType = 'arraybuffer'; // event.data will be an ArrayBuffer
 ws.binaryType = 'blob';        // event.data will be a Blob (the default)
 ```
 
-ค่าเริ่มต้นคือ `'blob'` ตั้งเป็น `'arraybuffer'` เมื่อคุณต้องการอ่านไบต์ในทันทีและแบบ synchronous — เช่นเพื่อห่อมันใน `DataView` หรือ `Uint8Array` แล้วดึงฟิลด์ออกมา การอ่าน `Blob` เป็นแบบ asynchronous ดังนั้นสำหรับโปรโตคอล binary ที่ต้องการ latency ต่ำ `'arraybuffer'` มักจะเหมาะกว่า
+ค่าเริ่มต้นคือ `'blob'` ตั้งเป็น `'arraybuffer'` เมื่อคุณต้องการอ่านไบต์ในทันทีและแบบ synchronous — เช่นเพื่อห่อไว้ใน `DataView` หรือ `Uint8Array` แล้วดึงฟิลด์ออกมา การอ่าน `Blob` เป็นแบบ asynchronous ดังนั้นสำหรับโปรโตคอล binary ที่ต้องการ latency ต่ำ `'arraybuffer'` มักจะเหมาะกว่า
 
 ```ts
 ws.binaryType = 'arraybuffer';
@@ -70,7 +70,7 @@ ws.onmessage = (event) => {
 
 ## การเฝ้าดู bufferedAmount
 
-`send()` คืนค่าทันที แต่ไบต์ไม่ได้อยู่บนสายเสมอไป — ถ้าคุณส่งเร็วกว่าที่เครือข่ายจะระบายออก พวกมันจะกองพะเนินอยู่ใน buffer ภายใน ฟิลด์อ่านอย่างเดียว `ws.bufferedAmount` บอกคุณว่ายังมีกี่ไบต์ที่อยู่ในคิว:
+`send()` คืนค่าทันที แต่ไบต์ไม่ได้อยู่บนสายเสมอไป — ถ้าคุณส่งเร็วกว่าที่เครือข่ายจะระบายออก ไบต์เหล่านั้นจะกองพะเนินอยู่ใน buffer ภายใน ฟิลด์อ่านอย่างเดียว `ws.bufferedAmount` บอกคุณว่ายังมีกี่ไบต์ที่อยู่ในคิว:
 
 ```ts
 if (ws.bufferedAmount < 1_000_000) {
@@ -78,7 +78,7 @@ if (ws.bufferedAmount < 1_000_000) {
 }
 ```
 
-นี่คือสัญญาณ backpressure ของคุณ เมื่อสตรีม binary data ขนาดใหญ่หรือถี่ ๆ ให้ตรวจ `bufferedAmount` ก่อนส่งเพิ่ม ถ้ามันไต่ขึ้นเรื่อย ๆ แสดงว่าคุณกำลังผลิตเร็วกว่าที่การเชื่อมต่อจะพาไปได้ และการเรียก `send()` แบบไม่ดูตาม้าตาเรือจะทำให้หน่วยความจำบวม
+นี่คือสัญญาณ backpressure ของคุณ เมื่อสตรีม binary data ขนาดใหญ่หรือถี่ ๆ ให้ตรวจ `bufferedAmount` ก่อนส่งเพิ่ม ถ้าค่านี้ไต่ขึ้นเรื่อย ๆ แสดงว่าคุณกำลังผลิตเร็วกว่าที่การเชื่อมต่อจะพาไปได้ และการเรียก `send()` แบบไม่ดูตาม้าตาเรือจะทำให้หน่วยความจำบวม
 
 <Mermaid title="การเลือกชนิด frame เมื่อคุณส่ง" code={binaryDiagram} />
 
@@ -92,7 +92,7 @@ export const binaryDiagram = `flowchart TD
 
 ## echo ArrayBuffer แบบสด
 
-เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server มันตั้ง `binaryType` เป็น `'arraybuffer'`, ส่ง `Uint8Array` เล็ก ๆ และอ่านไบต์ที่ echo กลับมาออกมาตรง ๆ ในแอปจริงมีเพียงบรรทัดแรก — `new WebSocket('wss://your-server')` — ที่เปลี่ยนไป
+เดโมใช้ echo socket ในหน้าเว็บที่มี WebSocket API จริง จึงรันได้ทุกที่โดยไม่ต้องมี server เดโมตั้ง `binaryType` เป็น `'arraybuffer'`, ส่ง `Uint8Array` เล็ก ๆ และอ่านไบต์ที่ echo กลับมาออกมาตรง ๆ ในแอปจริงมีเพียงบรรทัดแรก — `new WebSocket('wss://your-server')` — ที่เปลี่ยนไป
 
 export const binaryEchoCode = `(function () {
   // In-page echo socket with the same API as a real WebSocket.
@@ -146,7 +146,7 @@ export const binaryEchoCode = `(function () {
 | TypedArray (Uint8Array) | มี structured binary data | ต้อง align กับ ArrayBuffer |
 | Blob | file/media data ที่อ่านแบบ async | อ่านแบบ async เท่านั้น |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ลืมตั้ง binaryType ก่อน onopen**
 อาการ:
@@ -160,7 +160,7 @@ export const binaryEchoCode = `(function () {
 - memory ฝั่ง client บวม network timeout
 - check `if (ws.bufferedAmount < threshold)` ก่อนส่ง chunk ถัดไปเสมอ
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Binance/Bybit WebSocket Streams:**
 > - ส่ง market data เป็น binary — compact กว่า JSON 3-5x

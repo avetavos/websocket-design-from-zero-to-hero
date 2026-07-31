@@ -11,7 +11,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-ถึงเวลาเขียน server จริงสักตัว ใน Node ไลบรารีโดยพฤตินัยคือ [`ws`](/websocket/th/server-design/) — เล็ก, เร็ว, และใกล้ชิดกับโปรโตคอล บทเรียนนี้จะพาเดินผ่านสามชิ้นส่วนหลักของมัน: การสร้าง server, `connection` event, และการเรียก `message`/`send` ต่อ socket
+ถึงเวลาเขียน server จริงสักตัว ใน Node ไลบรารีโดยพฤตินัยคือ [`ws`](/websocket/th/server-design/) — เล็ก, เร็ว, และใกล้ชิดกับโปรโตคอล บทเรียนนี้จะพาเดินผ่านสามชิ้นส่วนหลักของตัวเอง: การสร้าง server, `connection` event, และการเรียก `message`/`send` ต่อ socket
 
 ## การสร้าง server
 
@@ -59,7 +59,7 @@ export const flowDiagram = `flowchart TB
 
 ## connection event
 
-ทุก upgrade ที่รับเข้ามาจะ fire `connection` event หนึ่งครั้ง callback ของมันรับ socket `ws` ที่เพิ่งเชื่อมต่อมาสด ๆ และ upgrade request `req` ตัวต้นฉบับ:
+ทุก upgrade ที่รับเข้ามาจะ fire `connection` event หนึ่งครั้ง callback ของตัวเองรับ socket `ws` ที่เพิ่งเชื่อมต่อมาสด ๆ และ upgrade request `req` ตัวต้นฉบับ:
 
 ```ts
 wss.on('connection', (ws, req) => {
@@ -69,7 +69,7 @@ wss.on('connection', (ws, req) => {
 });
 ```
 
-สองสิ่งที่ต้องซึมซับไว้ อย่างแรก handler นี้รัน **หนึ่งครั้งต่อ client** — ถ้ามีคนเชื่อมต่อร้อยคน มันก็ fire ร้อยครั้ง แต่ละครั้งมี `ws` ต่างกัน อย่างที่สอง `req` คือ HTTP upgrade request ซึ่งเป็นที่ที่คุณอ่าน cookie, header, หรือ URL เพื่อหาว่า *ใคร* เพิ่งเชื่อมต่อเข้ามา (เราจะพึ่งสิ่งนี้ในบทเรียนถัดไป)
+สองสิ่งที่ต้องซึมซับไว้ อย่างแรก handler นี้รัน **หนึ่งครั้งต่อ client** — ถ้ามีคนเชื่อมต่อร้อยคน handler ก็ fire ร้อยครั้ง แต่ละครั้งมี `ws` ต่างกัน อย่างที่สอง `req` คือ HTTP upgrade request นั่นคือที่ที่คุณอ่าน cookie, header, หรือ URL เพื่อหาว่า *ใคร* เพิ่งเชื่อมต่อเข้ามา (เราจะพึ่งสิ่งนี้ในบทเรียนถัดไป)
 
 ## การรับและการส่ง
 
@@ -93,7 +93,7 @@ wss.on('connection', (ws) => {
 
 ## รันของจริงสักตัว
 
-เดโมด้านล่างคือ **body ของ `connection` handler นั้น** ที่รันบน Node `ws` server ของจริง เปิดมันใน StackBlitz จากนั้น `npm run client` เพื่อเชื่อมต่อ มันทักทาย client แต่ละราย, echo ข้อความพร้อม counter, และรายงาน close code
+เดโมด้านล่างคือ **body ของ `connection` handler นั้น** ที่รันบน Node `ws` server ของจริง เปิดใน StackBlitz จากนั้น `npm run client` เพื่อเชื่อมต่อ server จะทักทาย client แต่ละราย, echo ข้อความพร้อม counter, และรายงาน close code
 
 export const serverCode = `// Body of wss.on('connection', (ws, req) => { ... }) — ws/wss/req in scope.
 ws.send('welcome — send me anything');
@@ -113,14 +113,14 @@ ws.on('error', (err) => console.error('socket error:', err.message));`;
 
 ทุกข้อความที่คุณส่งกลับมาพร้อมหมายเลข — เป็นหลักฐานว่าตัวแปร `count` มีชีวิตอยู่ตลอดอายุของ connection หนึ่งนั้น ไม่ใช่ต่อข้อความ scope ต่อ socket นั้นแหละคือสิ่งที่บทเรียนถัดไปจะแปรเปลี่ยนเป็น **state** ต่อ connection ที่มีประโยชน์
 
-| Benefits (WebSocket Server) | Trade-offs |
+| ข้อดี (WebSocket Server) | ข้อแลกเปลี่ยน |
 |---|---|
 | handle message ด้วย event loop — ไม่ block ต่อ connection | connection แต่ละตัวกิน memory — 10k connection = 10k state objects |
 | event-driven — server ตอบสนองเฉพาะเมื่อมี event | long-lived connection ต้องมี health check mechanism |
 | Node.js/ws ใช้ single thread handle concurrent connection ได้ | CPU-intensive work ต้องออก worker thread |
 | integrate กับ HTTP server เดิมได้ — shared port | open file descriptor limit บน OS ต้องตั้งค่า |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **ทำ CPU-intensive Work ใน Message Handler**
 อาการ:
@@ -134,7 +134,7 @@ ws.on('error', (err) => console.error('socket error:', err.message));`;
 - OOM crash ทำให้ทุก user disconnect พร้อมกัน
 - ตั้ง max connection และ reject ด้วย 503 เมื่อเกิน limit
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Socket.IO:**
 > - popular WebSocket library สำหรับ Node.js — abstracts server-side handling

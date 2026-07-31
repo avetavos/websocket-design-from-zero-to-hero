@@ -21,7 +21,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 2. อีกฝ่ายตอบด้วย close frame ของตัวเอง
 3. หลังจากนั้นเท่านั้น TCP connection ที่อยู่เบื้องล่างจึงถูกรื้อทิ้ง
 
-นี่คือเหตุผลที่โมดูล foundations ยืนยันว่าการ close WebSocket นั้นสมมาตร เมื่อมันทำงาน ทั้งสองฝ่ายเห็นพ้องว่า connection จบแล้วและไม่มีใครเหลือให้เดา เบราว์เซอร์เปิดเผยสิ่งนี้ผ่าน event `onclose` ซึ่ง `event` ของมันบรรจุ `code`, `reason` และ flag `wasClean` ที่บอกคุณว่า handshake สมบูรณ์ทั้งหมดเสร็จสิ้นหรือไม่
+นี่คือเหตุผลที่โมดูล foundations ยืนยันว่าการ close WebSocket นั้นสมมาตร เมื่อทำงานได้ตามนั้น ทั้งสองฝ่ายเห็นพ้องว่า connection จบแล้วและไม่มีใครต้องเดา เบราว์เซอร์เปิดเผยเรื่องนี้ผ่าน event `onclose` โดยตัว event บรรจุ `code`, `reason` และ flag `wasClean` ที่บอกว่า handshake ปิดครบถ้วนหรือไม่
 
 <Mermaid title="Close handshake ที่สะอาด" code={closeDiagram} />
 
@@ -35,19 +35,19 @@ export const closeDiagram = `sequenceDiagram
 
 ## การอ่าน close code
 
-Code คือสาเหตุการตายของ connection การรู้จักมันบอกคุณว่าควร reconnect ยอมแพ้ หรือแก้บั๊ก ตัวที่สำคัญ:
+Code คือสาเหตุการตายของ connection รู้จัก code ไว้ก็จะรู้ว่าควร reconnect ยอมแพ้ หรือไปแก้บั๊ก ตัวที่สำคัญ:
 
 - **1000 — Normal Closure** ทุกอย่างจบลงตามที่ตั้งใจ การ `ws.close()` อย่างตั้งใจที่แอปของคุณเรียก **อย่า** auto-reconnect เมื่อเจอตัวนี้ การ close นั้นตั้งใจ
 - **1001 — Going Away** ฝ่ายหนึ่งกำลังจากไป — แท็บเบราว์เซอร์ที่กำลัง navigate ออกไป หรือ server ที่กำลัง shutdown เพื่อ deploy client ที่เห็น 1001 มักควร reconnect หลังจากสักครู่ server กำลังจะกลับมา
-- **1006 — Abnormal Closure** ตัวที่คุณเจอในบทเรียน drop มันหมายความว่า connection ตาย *โดยไม่มี* close frame ที่เหมาะสม — และที่สำคัญ **ไม่เคยมี code ใดถูกส่งผ่านสายสำหรับ 1006** เบราว์เซอร์สร้างมันขึ้นมาเองในเครื่องเพื่อบอกคุณว่า "อันนี้จบแบบผิดปกติ" ทุกการ drop โดยอุบัติเหตุปรากฏเป็น 1006 นี่คือสัญญาณให้คุณ reconnect ด้วย backoff
+- **1006 — Abnormal Closure** ตัวที่คุณเจอในบทเรียน drop หมายความว่า connection ตาย *โดยไม่มี* close frame ที่เหมาะสม — และที่สำคัญ **ไม่เคยมี code ใดถูกส่งผ่านสายสำหรับ 1006** เบราว์เซอร์เป็นคนสร้างขึ้นมาเองในเครื่องเพื่อบอกว่า "อันนี้จบแบบผิดปกติ" ทุกการ drop โดยอุบัติเหตุจะโผล่มาเป็น 1006 นี่คือสัญญาณให้ reconnect ด้วย backoff
 - **1011 — Internal Error** server พบเงื่อนไขที่ไม่คาดคิดและกำลังจบ connection การ reconnect สมเหตุสมผล แต่ 1011 ที่เกิดต่อเนื่องหมายถึงบั๊กของ server ที่ต้องไล่ล่า
-- **4000-4999 — Application code** ช่วงนี้ทั้งหมดสงวนไว้สำหรับ *คุณ* protocol จะไม่มีวันนิยามมัน ดังนั้นมันจึงเป็นของคุณที่จะกำหนดความหมาย: `4001` อาจเป็น "auth token expired", `4002` "kicked by an admin", `4008` "you are rate limited" client สามารถแยกสาขาตามตัวเหล่านี้ได้ — refresh token แล้ว reconnect เมื่อเจอ `4001` แต่หยุดและแสดงข้อความเมื่อเจอ `4002`
+- **4000-4999 — Application code** ช่วงนี้ทั้งหมดสงวนไว้ให้ *คุณ* protocol จะไม่นิยามอะไรในช่วงนี้เลย คุณกำหนดความหมายเองได้ทั้งหมด: `4001` อาจเป็น "auth token expired", `4002` "kicked by an admin", `4008` "you are rate limited" client สามารถแยกสาขาตามตัวเหล่านี้ได้ — refresh token แล้ว reconnect เมื่อเจอ `4001` แต่หยุดและแสดงข้อความเมื่อเจอ `4002`
 
 กฎในทางปฏิบัติ: **1000 หมายถึงหยุด ส่วนใหญ่ที่เหลือหมายถึง reconnect และ 4000+ หมายถึงทำสิ่งที่คุณตัดสินใจไว้ว่า code นั้นหมายถึงอะไร** ใส่ code เสมอ (และในอุดมคติคือ reason ด้วย) เมื่อ *คุณ* เป็นฝ่าย close เพื่อให้อีกฝ่ายตัดสินใจได้อย่างนั้นพอดี
 
 ## การ shutdown อย่างสะอาด
 
-เมื่อแอปของคุณจบ connection อย่างตั้งใจ — ผู้ใช้ logout, navigate ออกไป หรือปิดฟีเจอร์ — ให้ close มัน *อย่างเหมาะสม*:
+เมื่อแอปของคุณจบ connection อย่างตั้งใจ — ผู้ใช้ logout, navigate ออกไป หรือปิดฟีเจอร์ — ให้ close *อย่างเหมาะสม*:
 
 ```ts
 function shutdown(ws: WebSocket) {
@@ -56,7 +56,7 @@ function shutdown(ws: WebSocket) {
 }
 ```
 
-เหตุผลที่การ close อย่างสะอาดสำคัญคือด้านกลับของทุกอย่างในโมดูลนี้: connection ที่จบด้วย code 1000 บอกอีกฝ่ายว่า "อย่า reconnect นี่ตั้งใจให้เกิดขึ้น" ถ้าข้ามมันไป คุณก็ทิ้งให้ server ถือ connection ผีที่มันต้อง heartbeat จนตาย — ก็คือความยุ่งเหยิงแบบ half-open ที่เราพยายามหลีกเลี่ยงพอดี
+เหตุผลที่การ close อย่างสะอาดสำคัญคือด้านกลับของทุกอย่างในโมดูลนี้: connection ที่จบด้วย code 1000 บอกอีกฝ่ายว่า "อย่า reconnect นี่ตั้งใจให้เกิดขึ้น" ถ้าข้ามขั้นนี้ไป คุณก็ทิ้งให้ server ถือ connection ผีที่ต้องคอย heartbeat จนกว่าจะรู้ว่าตาย — ก็คือความยุ่งเหยิงแบบ half-open ที่เราพยายามหลีกเลี่ยงพอดี
 
 ## Resume — การเล่นซ้ำสิ่งที่คุณพลาด
 
@@ -65,15 +65,15 @@ function shutdown(ws: WebSocket) {
 รูปแบบ:
 
 1. server ประทับทุกข้อความด้วย id ที่เพิ่มขึ้นแบบ monotonic: `1, 2, 3, ...`
-2. client จำ id ของข้อความสุดท้ายที่มันประมวลผลสำเร็จ — `lastSeenId` ของมัน
+2. client จำ id ของ message สุดท้ายที่ประมวลผลสำเร็จไว้ใน `lastSeenId`
 3. เมื่อ reconnect client ส่ง `lastSeenId` ไปยัง server เป็นส่วนหนึ่งของ resume request
 4. server เล่นซ้ำทุกข้อความที่มี id มากกว่า `lastSeenId` แล้วกลับมาส่งแบบสด
 
-client กลับมาที่จุดที่มันค้างไว้พอดี โดยไม่มีช่องว่างและไม่มีตัวซ้ำ (server ต้องมี buffer สั้น ๆ ของข้อความล่าสุดให้เล่นซ้ำจากมัน ช่องว่างที่เก่ามากจริง ๆ อาจต้อง refresh state ทั้งหมดแทน แต่สำหรับการ drop สั้น ๆ การเล่นซ้ำจะราบรื่น)
+client กลับมาต่อที่จุดค้างไว้พอดี ไม่มีช่องว่างและไม่มีตัวซ้ำ (ฝั่ง server ต้องเก็บ buffer สั้น ๆ ของ message ล่าสุดไว้ให้เล่นซ้ำได้ ถ้าช่องว่างเก่ามากจริง ๆ อาจต้อง refresh state ทั้งก้อนแทน แต่สำหรับการ drop สั้น ๆ การเล่นซ้ำจะราบรื่น)
 
 ## close-and-resume แบบสด
 
-เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง mock server ใส่เลขให้ทุกข้อความที่มันส่ง เราปล่อยให้ client รับสองสามตัว แล้ว connection ก็ drop (close code 1006) ในขณะที่ server ยังผลิตข้อความต่อไป เมื่อ reconnect client ส่ง `lastSeenId` ของมันและ server เล่นซ้ำข้อความที่มันพลาดไปพอดี — แล้วกลับมาส่งแบบสด
+เดโมด้านล่างใช้ socket ในหน้าที่มี `WebSocket` API จริง mock server ใส่เลขให้ทุก message ที่ส่งออกไป เราปล่อยให้ client รับสองสามตัว แล้ว connection ก็ drop (close code 1006) ระหว่างที่ server ยังผลิต message ต่อไป พอ reconnect client ส่ง `lastSeenId` ไปให้ แล้ว server ก็เล่นซ้ำเฉพาะ message ที่พลาดไปพอดี — จากนั้นกลับมาส่งแบบสดตามปกติ
 
 export const resumeCode = `(function () {
   // In-page socket with the real WebSocket API. The mock numbers every message
@@ -142,7 +142,7 @@ export const resumeCode = `(function () {
 
 <NodeRunner client:visible code={resumeCode} />
 
-ดูลำดับ: client รับข้อความ 1 และ 2 แบบสด แล้ว connection ก็ drop (code 1006) ในขณะที่ข้อความ 3 ยังคิวอยู่บน server client reconnect ส่ง `lastSeenId=2` และ server เล่นซ้ำ *เฉพาะ* ข้อความ 3 — ไม่มีช่องว่าง ไม่มีตัวซ้ำของ 1 หรือ 2 การตามเก็บที่ราบรื่นนั้นคือสิ่งที่ทุกแอป real-time ที่สร้างมาดีทำอยู่เบื้องหลัง และมันเป็นไปได้ก็เพราะ reconnection และ last-seen id ทำงานร่วมกันเท่านั้น
+ดูลำดับ: client รับ message 1 และ 2 แบบสด แล้ว connection ก็ drop (code 1006) ตอนที่ message 3 ยังคิวอยู่บน server พอ client reconnect ก็ส่ง `lastSeenId=2` ไป แล้ว server เล่นซ้ำ *เฉพาะ* message 3 — ไม่มีช่องว่าง ไม่มีตัวซ้ำของ 1 หรือ 2 การตามเก็บที่ราบรื่นแบบนี้คือสิ่งที่แอป real-time ที่สร้างมาดีทำอยู่เบื้องหลัง และเป็นไปได้ก็เพราะ reconnection กับ last-seen id ทำงานร่วมกัน
 
 | Close Code | ความหมาย | ควร Reconnect? |
 |---|---|---|
@@ -151,7 +151,7 @@ export const resumeCode = `(function () {
 | 1006 | Abnormal — ไม่มี close frame | ใช่ — ด้วย backoff |
 | 4000-4999 | Application-defined | ขึ้นกับความหมายของ code |
 
-## Common Mistakes
+## ข้อผิดพลาดที่พบบ่อย
 
 **Reconnect เมื่อได้รับ Code 1000**
 อาการ:
@@ -165,7 +165,7 @@ export const resumeCode = `(function () {
 - user เห็นช่องว่างในข้อมูล real-time
 - ส่ง `lastSeenId` ตอน reconnect ให้ server replay missed messages
 
-> 💡 Real World Example
+> 💡 ตัวอย่างจากของจริง
 >
 > **Discord:**
 > - code 4xxx เช่น 4000 (Unknown), 4007 (Invalid seq) — app แยกว่าควร resume หรือ reconnect fresh
@@ -175,7 +175,7 @@ export const resumeCode = `(function () {
 > - reconnect พร้อม last event timestamp เพื่อ replay missed messages
 
 <Callout title="Close และ resume ในหนึ่งบรรทัด">
-Close อย่างสะอาดด้วย **code** (1000 = ตั้งใจ, 1006 = มันพัง, 4000+ = ความหมายของคุณเอง) เพื่อให้อีกฝ่ายรู้ว่าควร reconnect หรือไม่ จากนั้น ด้วยการประทับ id ให้ข้อความและจำ **last-seen id** ไว้ client ที่กำลัง reconnect จะเล่นซ้ำสิ่งที่มันพลาดได้พอดี — ปิดลูปของวงจรชีวิตทั้งหมด
+Close อย่างสะอาดด้วย **code** (1000 = ตั้งใจ, 1006 = พังกลางทาง, 4000+ = ความหมายของคุณเอง) เพื่อให้อีกฝ่ายรู้ว่าควร reconnect หรือไม่ จากนั้นแค่ประทับ id ให้ message และจำ **last-seen id** ไว้ client ที่กำลัง reconnect ก็เล่นซ้ำเฉพาะส่วนที่พลาดไปได้พอดี — ปิดลูปของวงจรชีวิตทั้งหมด
 </Callout>
 
 export const quizClose = [
@@ -183,7 +183,7 @@ export const quizClose = [
     q: 'Close code 1006 (Abnormal Closure) บ่งบอกอะไร?',
     options: [
       'แอปพลิเคชัน close connection อย่างตั้งใจตามปกติ',
-      'connection ตายโดยไม่มี close frame ที่เหมาะสม — เบราว์เซอร์สร้าง 1006 ขึ้นมาเองในเครื่อง มันไม่เคยถูกส่งผ่านสาย',
+      'connection ตายโดยไม่มี close frame ที่เหมาะสม — เบราว์เซอร์สร้าง 1006 ขึ้นมาเองในเครื่อง ไม่เคยถูกส่งผ่านสาย',
       'server กำลัง shutdown เพื่อ deploy ตามแผน',
       'client ถูก rate limit',
     ],
@@ -202,10 +202,10 @@ export const quizClose = [
   {
     q: 'last-seen id ทำให้ client ที่กำลัง reconnect resume ได้โดยไม่มีช่องว่างหรือตัวซ้ำได้อย่างไร?',
     options: [
-      'มัน re-download ประวัติทั้งหมดทุกครั้ง',
-      'client ส่ง last-seen id ของมันและ server เล่นซ้ำเฉพาะข้อความที่มี id มากกว่า',
-      'มันเข้ารหัส connection เพื่อให้ไม่มีอะไรหายไปเลย',
-      'มัน ping server จนกว่าข้อความเก่าทั้งหมดจะถูกส่งซ้ำแบบสุ่ม',
+      're-download ประวัติทั้งหมดใหม่ทุกครั้ง',
+      'client ส่ง last-seen id ไปให้ แล้ว server เล่นซ้ำเฉพาะ message ที่มี id มากกว่านั้น',
+      'เข้ารหัส connection เพื่อไม่ให้อะไรหายไปเลย',
+      'ping server จนกว่า message เก่าทั้งหมดจะถูกส่งซ้ำแบบสุ่ม',
     ],
     answer: 1,
   },
