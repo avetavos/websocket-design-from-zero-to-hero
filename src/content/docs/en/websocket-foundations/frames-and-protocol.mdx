@@ -65,6 +65,29 @@ Two URL schemes, exactly mirroring the web:
 
 Here is the reassuring part: the API handles frames, masking, and reassembly for you. When you write `ws.send('hello, server')`, the library encodes a masked text frame; when a message arrives, it hands you a clean reassembled string or blob in `onmessage`. You design *messages*; the protocol moves *frames*. Knowing the frame layer simply means you will understand exactly what is happening when we later tune heartbeats, handle binary data, and debug closes.
 
+## Common mistakes
+
+**Sending a large payload without fragmenting it**
+Symptoms:
+- Sending a 10MB JSON blob in a single frame
+- The receiver has to wait for the whole frame before it can process anything — blocking
+- Use fragmentation or paginate the message instead
+
+**Using `ws://` in production**
+Symptoms:
+- Data travels as plaintext over the network
+- A man-in-the-middle can intercept or inject data
+- Always use `wss://` in production
+
+> 💡 Real-world example
+>
+> **Google Meet:**
+> - Uses binary frames for video/audio data over WebRTC (codecs such as VP8, Opus)
+> - Uses text frames (JSON) for control messages like mute, chat, and the participant list
+>
+> **General principle (the same shape many multiplayer/design tools use):**
+> - Send cursor position and selection state as binary frames instead of JSON to cut parsing overhead on very high-frequency events (no primary source backs a specific percentage figure here, so none is claimed)
+
 <Callout title="The frame-layer summary">
 After the handshake, data travels as **frames** with opcodes for text, binary, ping/pong, and close. Client-to-server frames are **masked**, messages can be **fragmented**, and production uses **`wss://`** (TLS). The `WebSocket` API does all of this for you — you work in messages, not frames.
 </Callout>

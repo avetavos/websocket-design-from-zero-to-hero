@@ -131,12 +131,11 @@ export const liveEchoCode = `(function () {
 > 💡 ตัวอย่างจากของจริง
 >
 > **Discord:**
-> - WebSocket สำหรับ real-time message, presence, voice state
-> - fallback ไปยัง long polling เมื่อ WebSocket ไม่ available
+> - ใช้ WebSocket เป็น Gateway หลักสำหรับ real-time message, presence, และ voice state signaling ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 >
-> **Slack:**
-> - RTM (Real Time Messaging) API ผ่าน WebSocket
-> - ทุก message, reaction, typing indicator ส่งผ่าน WebSocket connection เดียว
+> **Slack (Legacy RTM API):**
+> - เคยส่ง message, reaction, typing indicator ผ่าน WebSocket connection เดียวด้วย RTM (Real Time Messaging) API
+> - Slack เลิกใช้ RTM แล้ว (deprecated) หันไปใช้ Socket Mode/Events API แทน ([Slack — Legacy RTM API](https://docs.slack.dev/legacy/legacy-rtm-api/))
 
 <Callout title="บทสรุปบรรทัดเดียว">
 HTTP คือลำดับของธุระสั้น ๆ ที่ client เป็นผู้ถาม ส่วน WebSocket คือการเชื่อมต่อเส้นเดียวที่เปิดค้างไว้ เพื่อให้ **ฝ่ายใดฝ่ายหนึ่ง** ส่งข้อความได้ทุกเมื่อที่ต้องการ — นั่นคือสิ่งที่แชตเรียลไทม์ ฟีดสด และการทำงานร่วมกันต้องการจริง ๆ

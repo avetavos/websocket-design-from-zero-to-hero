@@ -145,13 +145,11 @@ export const sendRecvCode = `(function () {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Slack:**
-> - รับ message เป็น JSON: `{ "type": "message", "text": "Hello", "channel": "C1234" }`
-> - dispatch ตาม `type` field — event-driven message handling
+> **หลักการทั่วไปของแอปแชท (แนวเดียวกับที่ Slack เคยใช้ใน Legacy RTM API):**
+> - รับ message เป็น JSON เช่น `{ "type": "message", "text": "Hello", "channel": "C1234" }` แล้ว dispatch ตาม `type` field — event-driven message handling
 >
 > **Google Docs:**
-> - ส่ง operation เป็น binary (OT operations) — compact และเร็ว
-> - รับ update จาก server และ apply ต่อ document state local
+> - ใช้ Operational Transformation (OT) — ส่ง operation ไปยัง server แล้วรับ update กลับมา apply ต่อ document state บนเครื่อง client ([Wikipedia — Operational transformation](https://en.wikipedia.org/wiki/Operational_transformation))
 
 <Callout title="สองทิศทาง สามกฎ">
 ส่งด้วย `ws.send(data)`; รับบน `event.data` ภายใน `onmessage` คุณส่งได้เฉพาะตอน `OPEN` (ส่งก่อนหน้านั้นจะ throw, หลังจากนั้นจะถูกทิ้ง), การส่งรักษาลำดับเอาไว้บนการเชื่อมต่อ TCP เดียว แต่ API ไม่เคยจับคู่การตอบกลับกับ request — เพิ่ม correlation id ของคุณเองถ้าคุณต้องการแบบนั้น

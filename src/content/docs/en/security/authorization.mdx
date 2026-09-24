@@ -83,6 +83,27 @@ ws.on('message', (data) => {
 
 Because `ws.user` is `alice`, a `member`, a `post` is allowed but a `delete` is denied — **even if the client adds `"user": "admin"` to the message**, because the server never reads that field. Flip `ws.user` to `'bob'` and the `delete` is allowed. That is the whole discipline: identity comes from the connection, permission is recomputed per message, and the message body is treated as a request, not as a source of truth.
 
+## Common mistakes
+
+**Checking auth only at connection time**
+Symptoms:
+- Validating the token on connect but never checking per-room or per-action permissions
+- An authenticated user can join every room and send every kind of message
+- Check permissions on every action: joining a room, sending a message, subscribing to a channel
+
+**A token that expires while the connection stays open**
+Symptoms:
+- A user connects with a JWT that expires in an hour
+- An hour later the connection is still open — the user can still send messages
+- Validate token expiry per message, or implement a token refresh flow over the WebSocket
+
+> 💡 Real-world example
+>
+> **The general principle chat/collaboration products follow (no company is named here — the internal mechanics have no public primary source):**
+> - Authorization is scoped to a "room" or "project," not the whole connection — not every user sees every channel
+> - A message sent to a resource the user has no permission for is rejected at the message level, not just the connection level
+> - A collaborative session tied to a specific owner/collaborator list rejects the WebSocket if the token has no permission for that resource
+
 <Callout title="The connection knows who you are; the message does not">
 Authenticate **once** at the handshake and pin the identity to the socket. Authorize **every** message against that pinned identity — never against a user or role the client put in the payload. A client can claim to be anyone; only the server-side identity is real.
 </Callout>

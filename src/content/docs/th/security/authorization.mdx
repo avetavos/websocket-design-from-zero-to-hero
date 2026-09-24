@@ -106,13 +106,10 @@ ws.on('message', (data) => {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Slack:**
-> - authorization ต่อ channel — ไม่ใช่ทุก user เห็นทุก channel
-> - message ที่ส่งไปยัง channel ที่ user ไม่มีสิทธิ์ → reject
->
-> **GitHub Codespaces:**
-> - authorization ต่อ codespace — เข้าถึงได้เฉพาะ owner และ collaborator
-> - terminal WebSocket reject ถ้า token ไม่มีสิทธิ์ต่อ codespace นั้น
+> **หลักการทั่วไปที่ผลิตภัณฑ์แชท/ระบบ collaboration ใช้ (ไม่ระบุชื่อบริษัท เพราะกลไกภายในไม่มีแหล่งอ้างอิงปฐมภูมิสาธารณะ):**
+> - authorization ทำต่อ "ห้อง" หรือ "โปรเจกต์" ไม่ใช่ต่อทั้ง connection — ไม่ใช่ทุก user เห็นทุกช่องทาง
+> - message ที่ส่งไปยัง resource ที่ user ไม่มีสิทธิ์ → reject ที่ระดับ message ไม่ใช่แค่ที่ระดับ connection
+> - terminal/collaborative session แบบที่ต้องผูกกับสิทธิ์เฉพาะ owner/collaborator จะ reject WebSocket ถ้า token ไม่มีสิทธิ์ต่อ resource นั้น
 
 <Callout title="การเชื่อมต่อรู้ว่าคุณเป็นใคร message ไม่รู้">
 Authenticate **ครั้งเดียว** ที่ handshake แล้ว pin ตัวตนไว้กับ socket Authorize **ทุก** message เทียบกับตัวตนที่ pin ไว้นั้น — ไม่ใช่เทียบกับ user หรือ role ที่ client ใส่ไว้ใน payload client อ้างเป็นใครก็ได้; มีเพียงตัวตนฝั่ง server เท่านั้นที่จริง

@@ -114,6 +114,30 @@ export const schemaCode = `(function () {
 
 The v1 message and the v2 message both flowed through the *same* `handleChat`, the new `lang` field appearing only where it was sent and defaulting to `en` where it was not — that is additive evolution working. The third message never reached a handler because validation stopped it at the door. Build those two habits in from day one and your protocol can grow for years without a flag day.
 
+## Common mistakes
+
+**Not validating a message before handling it**
+Symptoms:
+- `msg.payload.text` without checking that `payload` exists — crashes when a client sends a malformed message
+- Crashes the connection with an unhandled error
+- Always validate the envelope first: it must have `type`, `v`, and `payload`
+
+**Changing the meaning of an existing field**
+Symptoms:
+- `"status": "ok"` becomes `"status": 200` (string to number) — old clients parse it wrong
+- Behavior changes underneath clients that have no idea it happened
+- Always add new fields instead of changing existing ones — bump `v` when a breaking change is unavoidable
+
+> 💡 Real-world example
+>
+> **Discord Gateway:**
+> - Every event carries `op` (opcode), `d` (data), `s` (sequence), and `t` (event name) ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+> - A consistent envelope — clients dispatch on `op` first, then look at `t`
+>
+> **Twitch EventSub:**
+> - Every message has `metadata.message_type` and `metadata.message_id` ([Twitch Developers — EventSub WebSocket reference](https://dev.twitch.tv/docs/eventsub/websocket-reference/))
+> - A version field on the subscription type supports multiple versions at once
+
 <Callout title="The one-line takeaway">
 Wrap every message in a consistent **envelope** (`type` + `v` + `payload`), **validate** what arrives before any handler trusts it, and **evolve additively** — add optional fields and bump `v` for breaking changes — so old and new clients keep talking to the same server.
 </Callout>

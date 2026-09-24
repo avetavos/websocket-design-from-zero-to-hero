@@ -95,6 +95,30 @@ export const framingCode = `(function () {
 
 Three sends became three `onmessage` calls — the WebSocket kept the boundaries perfect. And because each message announced its `type`, the receiver handled all three kinds with a clean `if/else` instead of guessing from text. Add a fourth message type tomorrow and only one new branch changes.
 
+## Common mistakes
+
+**Cramming multiple messages into a single send()**
+Symptoms:
+- `ws.send('joined:bob\nchat:hello')` — two events in one call
+- The receiver parses it wrong — it works sometimes and not others
+- Always send one JSON object per `send()` call — WebSocket already gives you message boundaries for free
+
+**Dispatching on the shape of a string instead of a type field**
+Symptoms:
+- `if (data.startsWith('user joined'))` — brittle, hard to change
+- The smallest format change breaks every handler
+- Put a `type` field on every message and dispatch on that
+
+> 💡 Real-world example
+>
+> **Slack (legacy RTM API, deprecated):**
+> - Every message carried a `type` field: `"type": "message"`, `"type": "user_typing"`, `"type": "presence_change"`
+> - Clients dispatched on `type` — clear and easy to extend
+>
+> **Discord Gateway:**
+> - Uses `op` (opcode) instead of `type` to separate application messages from protocol control messages ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+> - Clients branch on the opcode first, then look at the payload
+
 <Callout title="The one-line takeaway">
 WebSocket already frames the **bytes** for you — one `send` is one `onmessage`. But you must still frame the **meaning**: send exactly one JSON object per message, give every message a `type`, and dispatch on that type.
 </Callout>

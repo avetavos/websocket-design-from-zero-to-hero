@@ -112,6 +112,28 @@ ws.onmessage = (event: MessageEvent) => {
 
 The application logic is identical to the JSON version — only the encode/decode calls and the frame type change. That is exactly why you can start with JSON and migrate the hot paths to binary later if measurements ask for it.
 
+## Common mistakes
+
+**Switching to binary before measuring performance**
+Symptoms:
+- Switching JSON to MessagePack with no evidence it was actually slow
+- Adds complexity with no clear benefit
+- Use JSON first; measure latency/bandwidth and only switch if it's an actual bottleneck
+
+**Mixing binary and JSON on one connection with no protocol**
+Symptoms:
+- Some messages are JSON, some are binary, with no type indicator
+- `onmessage` has to guess which format each frame is
+- Pick a clear convention: control messages = JSON, data streams = binary
+
+> 💡 Real-world example
+>
+> **Binance WebSocket Streams:**
+> - Uses JSON as the primary format for all market data streams, including subscription management ([Binance API Docs — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)) — no primary source confirms a "60% payload reduction" figure, so that number is dropped
+>
+> **General principle (the same shape many multiplayer/design tools use):**
+> - Use a binary format for high-frequency, fixed-shape operations (position, color, stroke) to cut parsing overhead, and JSON for metadata and configuration that changes shape more often
+
 <Callout title="The one-line takeaway">
 **JSON** is readable, universal, and the right default. **Binary** formats (MessagePack, Protobuf, CBOR) trade readability for smaller messages and faster parsing — worth it for high-volume, tiny, or latency-critical streams. Default to JSON; switch when measurements demand it.
 </Callout>

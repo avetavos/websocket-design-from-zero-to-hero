@@ -73,11 +73,12 @@ export const decisionDiagram = `flowchart TD
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **GitHub:** ใช้ SSE สำหรับ live event stream — one-way push ที่ไม่ต้องการ bidirectional
+> **หลักการเลือกตามทิศทางของข้อมูล (ไม่ระบุชื่อ product เจาะจงสำหรับ SSE เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยันกลไกภายใน):**
+> - live event stream ที่เป็น server → client อย่างเดียว มักเลือก SSE — ไม่ต้องการ bidirectional
 >
 > **Google Meet:** ใช้ WebRTC (SRTP/DTLS) สำหรับ audio/video — UDP-based delivery ลด latency
 >
-> **Discord:** ใช้ WebSocket — ต้องการ bidirectional (user action ↔ server event)
+> **Discord:** ใช้ WebSocket สำหรับ Gateway — ต้องการ bidirectional (user action ↔ server event) ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 
 <Callout title="เลือกตามทิศทางและความทนทาน">
 **SSE** เมื่อมีแต่ server push และคุณต้องการ auto-reconnect แบบฟรี **WebSocket** เมื่อทั้งสองฝั่งส่ง message ที่เรียงลำดับและเชื่อถือได้ — ค่าตั้งต้นที่ปลอดภัย **Long-polling** เป็น fallback ผ่าน proxy ที่เป็นปฏิปักษ์ **WebTransport** เมื่อคุณต้องการ datagram บน HTTP/3 หรือ stream แบบ multiplex สำหรับ media latency ต่ำ ความสามารถไม่เท่ากับความเหมาะสม — เลือกเครื่องมือที่เบาที่สุดที่พา traffic ของคุณได้

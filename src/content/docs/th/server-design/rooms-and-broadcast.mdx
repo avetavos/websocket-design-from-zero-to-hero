@@ -159,10 +159,9 @@ ws.on('error', leaveRoom);`;
 > 💡 ตัวอย่างจากของจริง
 >
 > **Discord:**
-> - room = channel — message broadcast เฉพาะ member ที่ join channel
-> - voice room — audio mix เฉพาะ user ใน voice channel เดียวกัน
+> - room = channel — message broadcast เฉพาะ member ที่ join channel นั้น ตาม model guild/channel ของ Gateway ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 >
-> **Figma:**
+> **หลักการทั่วไปของ collaborative editor (แนวเดียวกับที่ Figma ใช้):**
 > - room = document — cursor, selection broadcast เฉพาะ user ที่เปิด document เดียวกัน
 > - user ออกจาก document → remove จาก room อัตโนมัติ
 

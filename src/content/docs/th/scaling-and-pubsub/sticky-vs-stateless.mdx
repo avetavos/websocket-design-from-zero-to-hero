@@ -108,13 +108,11 @@ balancer ทำงานอยู่ตรงไหนของ stack เป็�
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Slack:**
-> - ใช้ sticky session สำหรับ RTM API — client ถูก pin ไว้กับ gateway instance
-> - ลด handshake overhead เมื่อ reconnect บ่อย ๆ
+> **Slack (Legacy RTM API, deprecated):**
+> - เคยใช้ sticky session — client ถูก pin ไว้กับ gateway instance เดิม เพื่อลด handshake overhead เมื่อ reconnect บ่อย ๆ
 >
-> **Twitch Chat:**
-> - stateless WebSocket server + Redis backplane
-> - autoscale ได้ระหว่าง event ใหญ่ — instance ใดก็ได้รับ subscribe message จาก chat channel
+> **หลักการทั่วไปของ chat platform ขนาดใหญ่ (แนวเดียวกับที่ live-chat service ใช้):**
+> - ใช้ stateless WebSocket server ร่วมกับ pub/sub backplane (เช่น Redis) แทน sticky session — instance ไหนก็รับ subscribe message จาก channel เดียวกันได้ ทำให้ autoscale ระหว่าง event ใหญ่ได้ง่ายกว่า
 
 <Callout title="เลือกหนึ่งอย่าง แต่เก็บ backplane ไว้">
 sticky session ปล่อยให้ instance ไว้ใจ in-memory state โดย route client แต่ละตัวกลับไปที่เดิม ส่วน stateless instance ผลัก state ทั้งหมดไปยัง shared store เพื่อให้ instance ใดก็ได้ให้บริการใครก็ได้ ไม่ว่าทางใด load balancer ต้อง forward `Upgrade` header และทน socket ที่ idle — และไม่ว่าทางใดคุณก็ยังต้องการ pub/sub backplane เพราะ stickiness ไม่เคยปล่อยให้ instance หนึ่งไปถึง client ของอีกตัว

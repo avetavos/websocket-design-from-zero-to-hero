@@ -57,6 +57,29 @@ A few facts that change real designs:
 
 If the data only flows server-to-client and plain HTTP is available, reach for **SSE** first; you will write less code. If the client must also send, use a **WebSocket** — it is mature, universally supported, and the path the rest of this course has prepared you for. Keep **long-polling** in your back pocket as the fallback for hostile networks, and watch **WebTransport** as it matures for the games-and-media tier where datagrams matter. Match the transport to the traffic, not to the hype.
 
+## Common mistakes
+
+**Using WebSocket when SSE is enough**
+Symptoms:
+- Only server push is needed (notifications, a live feed), but WebSocket gets picked anyway
+- Higher complexity than SSE with no benefit
+- SSE is simpler: auto-reconnect, the native EventSource API, and it runs over HTTP/2
+
+**Choosing WebTransport just because it's "newer"**
+Symptoms:
+- WebTransport browser support still isn't complete (Safari doesn't support it yet)
+- Not a good fit yet for a production app that needs wide support
+- Use WebTransport when you need UDP semantics: games where latency matters more than reliability
+
+> 💡 Real-world example
+>
+> **The general principle for picking by data direction (no specific product is named for SSE, since no primary source confirms the internal mechanism):**
+> - A live event stream that's purely server-to-client usually picks SSE — it doesn't need bidirectional communication
+>
+> **Google Meet:** Uses WebRTC (SRTP/DTLS) for audio/video — UDP-based delivery that keeps latency down
+>
+> **Discord:** Uses WebSocket for its Gateway, since it needs bidirectional communication (user actions and server events both ways) ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+
 <Callout title="Pick by direction and tolerance">
 **SSE** when only the server pushes and you want auto-reconnect for free. **WebSocket** when both sides send ordered, reliable messages — the safe default. **Long-polling** as the fallback through hostile proxies. **WebTransport** when you need HTTP/3 datagrams or multiplexed streams for low-latency media. Capability is not fit — choose the lightest tool that carries your traffic.
 </Callout>

@@ -117,12 +117,12 @@ export const framingCode = `(function () {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Slack RTM API:**
+> **Slack (Legacy RTM API, deprecated):**
 > - ทุก message มี `type` field: `"type": "message"`, `"type": "user_typing"`, `"type": "presence_change"`
 > - client dispatch ตาม `type` — ชัดเจน extensible
 >
 > **Discord Gateway:**
-> - ใช้ `op` (opcode) แทน `type` เพื่อแยก application message จาก protocol control
+> - ใช้ `op` (opcode) แทน `type` เพื่อแยก application message จาก protocol control ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 > - client แตกแขนงตาม opcode ก่อน แล้วจึงดู payload
 
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">

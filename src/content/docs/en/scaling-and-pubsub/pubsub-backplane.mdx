@@ -138,6 +138,28 @@ export const backplaneDemo = `(function () {
 
 The log proves the point: client-1's message was published once on instance A, the bus handed it to *both* subscribers, and clients 3 and 4 on instance B received it even though instance A never saw their sockets. Swap the in-page `Bus` for a real Redis client and this exact shape runs across machines.
 
+## Common mistakes
+
+**Publishing straight over the socket loop instead of through a bus**
+Symptoms:
+- `connections.forEach(conn => conn.socket.send(msg))` inside the `onClientMessage` handler
+- Clients on other instances never get the message
+- Publish to the bus only, and let the bus fan out to every subscriber
+
+**Subscribing to a channel redundantly, over and over**
+Symptoms:
+- Subscribing to `room:general` every time a client joins the room
+- A client ends up receiving the same message three times if there are three subscriptions
+- Subscribe once, at instance start — not on every client connect
+
+> 💡 Real-world example
+>
+> **Pusher:**
+> - A managed WebSocket product that uses a pub/sub backplane between instances — publish once, fan out to every subscriber
+>
+> **Ably:**
+> - Deploys its production cluster across 7 regions spanning the US, Europe, and Asia-Pacific — a publish in one region reaches subscribers in another ([Ably — Platform architecture](https://ably.com/docs/platform/architecture))
+
 <Callout title="The mental model">
 Stop thinking "send to all clients" and start thinking "publish an event, then each instance delivers to its own". The backplane turns one unreachable broadcast into many local broadcasts, one per instance — and because the publisher is also a subscriber, you write the delivery logic only once.
 </Callout>

@@ -122,6 +122,60 @@ export const deadDetectCode = `(function () {
 
 You will see two healthy ping/pong pairs, then the mock falls silent. The client keeps sending, the unanswered-pong count climbs, and once it crosses the threshold the client declares the connection dead and *terminates* it — without ever waiting for an `onclose` that was never going to come. That is detection: you stopped trusting silence and acted on the missing answer.
 
+## Common mistakes
+
+**Waiting for the onclose event on a dead connection**
+Symptoms:
+- A half-open connection never fires `onclose` — you'd wait forever
+- The server holds a zombie connection without knowing it
+- Use heartbeats plus missed pongs to detect it; don't wait on the event
+
+**A threshold that's too high — detection is slow**
+Symptoms:
+- A threshold of 10 missed pongs waits too long before declaring the connection dead
+- Bad UX — the user feels like the app is frozen
+- A threshold of 2-3 missed pongs fits most cases
+
+> 💡 Real-world example
+>
+> **Discord Gateway:**
+> - If no Heartbeat ACK arrives before the next heartbeat is due, the connection is considered "zombied" and gets terminated for an immediate reconnect ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+> - It doesn't wait on a TCP timeout
+>
+> **Cloudflare Durable Objects:**
+> - The runtime hibernates a Durable Object after roughly 10 seconds with no incoming events (not 60 seconds, as is commonly assumed) — a client using the Hibernation WebSocket API stays connected even while the object itself is asleep ([Cloudflare Durable Objects — WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/))
+
+| Dead connection scenario | Cause | Detection method |
+|---|---|---|
+| Client network drop | Wifi drops, mobile network switches | Heartbeat timeout |
+| Firewall/NAT timeout | An idle connection gets reset with no notice | Heartbeat gets no pong |
+| Process crash | Browser tab closes, app is killed | OS sends a TCP RST — `onclose` fires |
+| Server-side timeout | Server closes an idle connection | Close frame opcode |
+
+## More common mistakes
+
+**Trusting "TCP connected" to mean "application connected"**
+Symptoms:
+- The TCP connection is still up but no data is getting through (a half-open connection)
+- The server sends a message but the client never receives it — no error at all
+- Application-level heartbeats are necessary — TCP status alone isn't enough
+
+**A zombie connection the server doesn't know about**
+Symptoms:
+- A client disconnects ungracefully (network cut, process killed)
+- The server keeps tracking the connection in its map — a memory leak
+- Set a heartbeat timeout: if no pong arrives within N seconds, remove and close it
+
+> 💡 Real-world example
+>
+> **AWS API Gateway WebSocket:**
+> - A fixed idle connection timeout of 10 minutes (it can't be increased) and a maximum connection lifetime of 2 hours ([AWS Docs — WebSocket API quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html))
+> - The app must always send heartbeats more often than every 10 minutes if it wants a long-lived connection
+>
+> **nginx WebSocket proxy:**
+> - `proxy_read_timeout` defaults to 60 seconds — set `proxy_read_timeout 3600s` (or higher) for a long-lived WebSocket connection ([nginx — proxy_read_timeout](https://www.getpagespeed.com/server-setup/nginx/nginx-timeout))
+> - Leave it unset, and nginx closes an idle connection every 60 seconds (matching the default above)
+
 <Callout title="Detection in one line">
 A connection is dead when an owed pong does not arrive before its deadline. Count the misses, cross a small threshold, then **terminate** rather than politely close — because a half-open peer is already gone and there is no one left to handshake with.
 </Callout>

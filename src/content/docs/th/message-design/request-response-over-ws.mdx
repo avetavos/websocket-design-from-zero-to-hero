@@ -145,7 +145,7 @@ export const reqReplyCode = `(function () {
 > - ส่ง subscription request ด้วย `channel_id`
 > - server ตอบ `pusher_internal:subscription_succeeded` พร้อม `channel` ที่ match
 >
-> **Phoenix LiveView (Elixir):**
+> **Phoenix Channels / LiveView (Elixir):**
 > - ใช้ ref field เป็น correlation ID สำหรับทุก push/reply
 > - client track ref เพื่อ match response กับ request ที่ส่งไป
 

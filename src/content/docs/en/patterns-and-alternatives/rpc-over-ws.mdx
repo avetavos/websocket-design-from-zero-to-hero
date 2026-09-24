@@ -119,6 +119,29 @@ Notice the order in the log: `add` and `echo` are *sent* first and second, but `
 
 Keep the envelope minimal and symmetric. A request carries `id`, `method`, and `params`; a reply carries the same `id` and either `result` or `error`. If you want a standard instead of inventing your own, [JSON-RPC 2.0](https://www.jsonrpc.org/specification) defines exactly this shape — id, method, params, result/error — and is a sensible default to copy. Either way the rule is fixed: **the reply must echo the request's id**, or the client cannot route it.
 
+## Common mistakes
+
+**No request timeout for RPC**
+Symptoms:
+- Sending an RPC request and waiting for a response with no time limit
+- The server never responds (a crash, a bug) and the client hangs forever
+- Set a timeout per request: resolve with an error if no response arrives within N seconds
+
+**Using WebSocket RPC where HTTP REST is enough**
+Symptoms:
+- A one-off operation (login, create a post) goes over WebSocket RPC
+- Unnecessary overhead from a persistent connection
+- Use HTTP for stateless operations, WebSocket for stateful real-time ones
+
+> 💡 Real-world example
+>
+> **tRPC over WebSocket:**
+> - tRPC's `wsLink` provides real type-safe RPC over WebSocket — used for real-time subscriptions, while queries/mutations can still go over HTTP ([tRPC Docs — WebSockets](https://trpc.io/docs/server/websockets)) (Discord and Linear are omitted here since no primary source confirms either uses tRPC)
+>
+> **JSON-RPC 2.0 over WebSocket:**
+> - A standard protocol for RPC over WebSocket
+> - request: `\{ "jsonrpc": "2.0", "method": "sendMessage", "params": \{...\}, "id": 1 \}`
+
 <Callout title="Rebuild request/response yourself">
 A WebSocket has no built-in concept of a reply. Tag each request with a **correlation id**, store a **pending promise** keyed by that id, and resolve it when a message carrying the same id arrives. Always attach a **timeout** so a missing reply rejects and cleans up instead of hanging forever.
 </Callout>

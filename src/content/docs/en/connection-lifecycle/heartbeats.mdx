@@ -128,6 +128,29 @@ export const pingPongCode = `(function () {
 
 You will see pings going out and pongs coming back, one pair per second. Each returned pong is positive proof the connection was alive *at that instant* — not thirty seconds ago, not "probably". That is the whole point of a heartbeat: it converts silence, which tells you nothing, into a steady signal you can actually trust.
 
+## Common mistakes
+
+**No heartbeat at all**
+Symptoms:
+- A connection looks open on the server but the real client is long gone (a zombie connection)
+- A load balancer or firewall silently closes the idle connection with no notice
+- Implement a server-side ping every 30 seconds; close the connection if no pong comes back
+
+**A heartbeat interval that's too short**
+Symptoms:
+- Pinging every second wastes both ends' time on ping/pong instead of real data
+- Drains battery on mobile devices
+- A 30-60 second interval fits most cases — tune it to your firewall's timeout
+
+> 💡 Real-world example
+>
+> **Discord Gateway:**
+> - The client sends `{ "op": 1, "d": <last sequence> }` (the Heartbeat opcode) on the interval the server specifies in its Hello payload
+> - The server replies `{ "op": 11 }` (Heartbeat ACK); if no ACK arrives before the next heartbeat is due, the connection is considered "zombied" and gets reconnected ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+>
+> **Slack (legacy RTM API, deprecated):**
+> - Used an application-level ping/pong heartbeat to detect a connection that had died silently, before reconnecting automatically
+
 <Callout title="Heartbeats in one line">
 A heartbeat is deliberate traffic on a timer. Protocol ping/pong frames exist but are invisible to browser client code, so apps send **app-level** ping/pong messages — turning ambiguous silence into proof the connection is still breathing.
 </Callout>

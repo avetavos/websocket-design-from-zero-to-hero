@@ -140,13 +140,11 @@ export const stateEchoCode = `(function () {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **GitHub Codespaces Terminal:**
-> - ตรวจ readyState ก่อนส่ง input ทุก keystroke
-> - CONNECTING state → queue keystroke ไว้ส่งเมื่อ OPEN
+> **หลักการทั่วไปของ terminal/editor แบบ real-time ผ่าน WebSocket (ไม่ระบุชื่อ product เจาะจง เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยันกลไกภายใน):**
+> - ตรวจ readyState ก่อนส่ง input ทุก keystroke — ถ้ายังอยู่ใน CONNECTING ให้ queue keystroke ไว้ส่งเมื่อ OPEN
 >
-> **Figma:**
-> - แสดง "Reconnecting..." UI เมื่อ readyState เปลี่ยนจาก OPEN เป็น CLOSED
-> - user รู้ว่า connection ขาดและกำลัง reconnect
+> **หลักการที่ multiplayer editor ใช้ (แนวเดียวกับที่ Figma ใช้):**
+> - แสดง "Reconnecting..." UI เมื่อ readyState เปลี่ยนจาก OPEN เป็น CLOSED — user รู้ว่า connection ขาดและกำลัง reconnect
 
 <Callout title="สองมุมมอง ความจริงเดียว">
 สี่ event บอกคุณว่าการเชื่อมต่อเปลี่ยน *เมื่อไหร่*; `readyState` (0/1/2/3 หรือค่าคงที่ที่มีชื่อ) บอกคุณว่าอยู่ *ตรงไหน* ตอนนี้ ใส่ guard ให้การส่งของคุณด้วย `readyState === WebSocket.OPEN` และอ่าน `code` กับ `reason` จาก event `close` เพื่อรู้ว่าทำไมการเชื่อมต่อจึงจบลง

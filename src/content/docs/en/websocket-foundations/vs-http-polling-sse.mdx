@@ -65,6 +65,29 @@ A WebSocket also keeps one connection open, but it is **bidirectional**: after t
 - If both sides need to send frequently and interactively — chat, collaboration, games, live controls — **WebSockets** are the natural fit.
 - If you need something today on the most basic infrastructure and traffic is light, **long polling** is a reasonable stopgap; **short polling** only for the truly trivial.
 
+## Common mistakes
+
+**Using WebSocket for low-frequency updates**
+Symptoms:
+- Data updates every 30 seconds but the app reaches for WebSocket anyway
+- Adds complexity for no reason — HTTP polling every 30s would do the job
+- Evaluate the actual update frequency before picking a technology
+
+**Using long polling for high-frequency events**
+Symptoms:
+- Sending 100 events per second over long polling
+- That means opening 100 new HTTP connections per second — it destroys the server
+- Switch to WebSocket once the event rate goes above roughly 1-2 per second
+
+> 💡 Real-world example
+>
+> **The pattern real teams use (no numbers or company names here have a primary source that confirms them):**
+> - Features that are purely server-to-client (notifications, live feeds) usually pick SSE, because auto-reconnect comes for free and it runs over plain HTTP
+> - Features that need real bidirectional communication (chat, real-time DMs) need WebSocket
+>
+> **A common trend in chat products:**
+> - Start with long polling because it's simpler to implement, then migrate to WebSocket once polling's connection/server load becomes the bottleneck
+
 <Callout title="The distinction that trips people up">
 **SSE is server → client only.** **WebSockets are bidirectional.** If your client never needs to push over the same channel, SSE may be all you need; the moment you need genuine two-way traffic, reach for WebSockets.
 </Callout>

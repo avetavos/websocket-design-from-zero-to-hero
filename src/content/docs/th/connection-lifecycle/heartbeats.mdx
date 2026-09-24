@@ -151,12 +151,11 @@ export const pingPongCode = `(function () {
 > 💡 ตัวอย่างจากของจริง
 >
 > **Discord Gateway:**
-> - ส่ง `{ "op": 1, "d": null }` (Heartbeat opcode) ตาม interval ที่ server กำหนด
-> - server ตอบ `{ "op": 11 }` (Heartbeat ACK) — client รู้ว่า connection alive
+> - client ส่ง `{ "op": 1, "d": <last sequence> }` (Heartbeat opcode) ตาม interval ที่ server กำหนดตอน Hello
+> - server ตอบ `{ "op": 11 }` (Heartbeat ACK) — ถ้าไม่มี ACK มาก่อน heartbeat รอบถัดไป ให้ถือว่า connection "zombied" แล้ว reconnect ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 >
-> **Slack RTM API:**
-> - ping/pong ทุก 30 วินาที
-> - ถ้าไม่มี pong ใน 10 วินาที → reconnect อัตโนมัติ
+> **Slack (Legacy RTM API, deprecated):**
+> - เคยใช้ ping/pong เป็น application-level heartbeat เพื่อตรวจจับ connection ที่ตายไปเงียบ ๆ ก่อน reconnect อัตโนมัติ
 
 <Callout title="Heartbeat ในหนึ่งบรรทัด">
 Heartbeat คือ traffic ที่จงใจส่งบน timer Protocol ping/pong frame มีอยู่จริงแต่มองไม่เห็นจากcode client ที่เป็นเบราว์เซอร์ ดังนั้นแอปจึงส่งข้อความ ping/pong แบบ **app-level** — เปลี่ยนความเงียบที่กำกวมให้กลายเป็นหลักฐานว่า connection ยังหายใจอยู่

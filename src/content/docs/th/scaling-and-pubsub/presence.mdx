@@ -126,11 +126,10 @@ export const stampedeDiagram = `flowchart TB
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Slack:**
-> - presence เก็บใน distributed store + TTL
-> - "Active" status รีเฟรชทุก 30 วินาที — ไม่มี explicit "offline" event
+> **หลักการทั่วไปที่ chat/collaboration ขนาดใหญ่ใช้ (ไม่ระบุตัวเลข interval เจาะจง เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยัน):**
+> - presence เก็บใน distributed store พร้อม TTL — client ต้อง refresh ก่อน TTL หมด ไม่มี explicit "offline" event ต้องรอ ให้ TTL หมดอายุทำหน้าที่ cleanup แทน
 >
-> **Figma:**
+> **หลักการที่ multiplayer editor ใช้ (แนวเดียวกับ Figma):**
 > - แสดง cursor และ user ที่ active ใน document แบบ real-time
 > - presence key expire หลัง idle — cursor หายเองเมื่อ user ปิด tab โดยไม่แจ้ง
 

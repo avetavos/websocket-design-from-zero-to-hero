@@ -101,13 +101,11 @@ export const rebalanceDiagram = `flowchart TB
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Discord:**
-> - แต่ละ Gateway server รองรับ connection นับแสน
-> - ใช้ pub/sub backplane ข้าม region — message ใน server chat ถึง user ทุก instance
+> **Discord Gateway:**
+> - ใช้ pub/sub backplane ข้าม instance/region เพื่อให้ message ใน guild เดียวกันถึง user ทุก instance ที่ connect อยู่ ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 >
 > **Pusher:**
-> - managed WebSocket infrastructure — scale connection 100M+ พร้อมกัน
-> - backplane distributed ข้าม data center ทั่วโลก
+> - ผลิตภัณฑ์ managed WebSocket infrastructure ที่ออกแบบให้ scale connection ได้แบบ horizontal ผ่าน backplane แบบ distributed (ไม่ระบุตัวเลข concurrent connection เจาะจง เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยัน)
 
 <Callout title="สี่ปัญหา หนึ่งราก">
 connection state ใน memory, พื้นทรัพยากรต่อ connection, load ที่ติดอยู่กับ connection อายุยืน และ client ที่เข้าไม่ถึงบน instance อื่น ทั้งหมดสืบย้อนกลับไปที่รากเดียวกัน: ตัว connection — และความรู้ทั้งหมดเกี่ยวกับ connection นั้น — อยู่ภายใน process เดียว ทุกเทคนิคการ scaling ในโมดูลนี้คือวิธีเลี่ยงข้อจำกัดข้อนั้น

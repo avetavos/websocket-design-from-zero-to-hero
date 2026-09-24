@@ -122,13 +122,13 @@ handshake timeout เองอยู่สูงขึ้นไปหนึ่�
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Cloudflare WebSocket:**
-> - TLS terminate ที่ edge — wss:// ถึง Cloudflare, แล้วส่งต่อผ่าน internal network
-> - DDoS protection built-in — absorb connection flood ก่อนถึง origin server
+> **Cloudflare (WebSocket support):**
+> - TLS terminate ที่ edge — wss:// ถึง Cloudflare แล้วส่งต่อผ่าน internal network ([Cloudflare — WebSockets](https://developers.cloudflare.com/network/websockets/))
+> - มี DDoS protection มาให้ในตัว — ดูดซับ connection flood ก่อนถึง origin server
 >
-> **Discord:**
-> - wss:// เสมอ — message ทุกชิ้น encrypt บน wire
-> - rate limit และ connection limit ป้องกัน abuse จาก bot farm
+> **Discord Gateway:**
+> - ใช้ wss:// เสมอ — message ทุกชิ้น encrypt บน wire ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+> - rate limit ต่อ connection (ดูรายละเอียดในบท rate limiting) ช่วยจำกัดผลของ abuse
 
 <Callout title="เข้ารหัสทุกอย่าง; ปฏิเสธให้ราคาถูก จัดสรรให้สาย">
 รันบน **`wss`/TLS** เท่านั้น จำกัดการเชื่อมต่อ ไม่ใช่แค่ message: **จำกัดการเชื่อมต่อต่อ IP**, **time out handshake ที่ช้า/ไม่เสร็จ** (slowloris), และใช้ **heartbeat พร้อม idle timeout** เพื่อทวงคืน socket ที่ตายแล้ว เหนือสิ่งอื่นใด **authenticate ก่อนที่คุณจะจัดสรร** — ทุกทรัพยากรราย connection ควรถูกใช้หลังจาก origin และ credential ผ่านแล้วเท่านั้น เพื่อที่ผู้โจมตีที่ถูกปฏิเสธจะทำให้คุณเสียอะไรแทบไม่เลย

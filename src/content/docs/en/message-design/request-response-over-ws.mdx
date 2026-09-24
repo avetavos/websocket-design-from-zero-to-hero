@@ -119,6 +119,30 @@ Watch the order: bob's reply comes back first because the server answered him fa
 
 A couple of refinements you would add in production: a **timeout** that rejects a pending entry if no reply arrives, and cleanup of the `pending` map if the socket closes so no promise hangs forever.
 
+## Common mistakes
+
+**No timeout for a pending request**
+Symptoms:
+- Send a request and the server never replies — the promise hangs forever
+- Memory leak from a `pending` map that only grows
+- Set a timeout per request: `setTimeout(() => reject('timeout'), 5000)`, then remove it from the map
+
+**Not clearing the pending map on connection close**
+Symptoms:
+- WS closes and reconnects, but promises from the old session are still waiting
+- Memory leak, plus stale handlers firing after reconnect
+- In `onclose`: reject and clear the entire pending map
+
+> 💡 Real-world example
+>
+> **Pusher Channels:**
+> - Sends a subscription request with a `channel_id`
+> - The server replies `pusher_internal:subscription_succeeded` with the matching `channel`
+>
+> **Phoenix Channels / LiveView (Elixir):**
+> - Uses a `ref` field as the correlation ID on every push/reply
+> - The client tracks the ref to match a response back to the request it sent
+
 <Callout title="The one-line takeaway">
 A WebSocket has no built-in request/response — replies and pushes share one stream and can arrive out of order. Put a unique **`id`** on each request, have the server **echo it** on the reply, and keep an *id → waiter* map so every answer finds the question that asked it.
 </Callout>

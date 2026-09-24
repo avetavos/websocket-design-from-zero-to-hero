@@ -136,12 +136,10 @@ ws.onmessage = (event: MessageEvent) => {
 > 💡 ตัวอย่างจากของจริง
 >
 > **Binance WebSocket Streams:**
-> - ใช้ JSON สำหรับ subscription management
-> - ใช้ binary (custom binary format) สำหรับ high-frequency order book update — ลด payload ได้ 60%
+> - ใช้ JSON เป็น format หลักของ market data stream ทั้งหมด รวมถึง subscription management ([Binance API Docs — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)) — ไม่พบแหล่งอ้างอิงปฐมภูมิที่ยืนยันตัวเลข "ลด payload 60%" จึงตัดตัวเลขนี้ทิ้ง
 >
-> **Figma Multiplayer:**
-> - ใช้ binary (custom format) สำหรับ drawing operation — compact สำหรับ position/color/stroke data
-> - JSON สำหรับ metadata และ configuration
+> **หลักการทั่วไป (แนวเดียวกับ multiplayer/design tool หลายเจ้า):**
+> - ใช้ binary format สำหรับ operation ที่ยิงถี่และมีโครงสร้างคงที่ (position, color, stroke) เพื่อลด parsing overhead, ใช้ JSON สำหรับ metadata และ configuration ที่เปลี่ยนรูปแบบบ่อยกว่า
 
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">
 **JSON** อ่านได้ ใช้ได้ทุกที่ และเป็นค่าเริ่มต้นที่ถูกต้อง ส่วน format แบบ **binary** (MessagePack, Protobuf, CBOR) แลกความอ่านได้กับ message ที่เล็กลงและ parse ได้เร็วขึ้น — คุ้มค่าสำหรับสตรีมที่ปริมาณสูง เล็ก หรือ latency-critical ตั้งค่าเริ่มต้นเป็น JSON เปลี่ยนเมื่อการวัดเรียกร้อง

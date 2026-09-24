@@ -140,6 +140,28 @@ To exercise rooms properly, connect two clients with different tokens (e.g. `?to
 
 Step back and notice what this small file is: a complete, defensible real-time service. It refuses anonymous sockets, routes by room instead of blasting everyone, survives clients that vanish without a `close`, and speaks a typed protocol a reconnecting client can resume against. Every one of those properties came from a separate module — and assembling them is exactly the skill this course set out to teach. From here, scaling it across instances is the [pub/sub fan-out](/websocket/en/scaling-and-pubsub/) you already met; everything else is product.
 
+## Common mistakes
+
+**Building the real-time feature before the core feature exists**
+Symptoms:
+- Spending time on WebSocket infrastructure before the main feature even works
+- The product hasn't proven users actually want real-time yet
+- Build the feature with HTTP polling first; upgrade to real-time only once users need it
+
+**No offline state handling**
+Symptoms:
+- A user goes offline briefly, comes back online, and missed events in between
+- The UI shows stale data with no idea what it missed
+- On reconnect, request the missed events via a REST API or a replay mechanism
+
+> 💡 Real-world example
+>
+> **Figma:**
+> - A multiplayer collaborative editor built on WebSocket — Figma considered both CRDTs and operational transformation and rejected both as more complex than it needed, choosing instead a central server that orders optimistic edits with a last-writer-wins rule per property ([Figma Blog — How Figma's multiplayer technology works](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/))
+>
+> **The general shape collaborative apps use for instant-feeling UX (the same idea many modern issue trackers follow):**
+> - Apply the update optimistically on the client first, then sync with the server through an event afterward — it feels instant even when real network latency is higher than that
+
 <Callout title="The capstone in one line">
 A production-shaped real-time service is **auth on connect**, **rooms** for routing, **heartbeats** to detect dead links, and a **typed, reconnect-friendly protocol** — each a module you have already done, wired together over one `ws` server.
 </Callout>

@@ -145,12 +145,11 @@ export const deadDetectCode = `(function () {
 > 💡 ตัวอย่างจากของจริง
 >
 > **Discord Gateway:**
-> - ถ้าไม่ได้รับ Heartbeat ACK — ส่ง non-resumable close code แล้ว reconnect ทันที
+> - ถ้าไม่ได้รับ Heartbeat ACK ก่อนถึงรอบ heartbeat ถัดไป ให้ถือว่า connection "zombied" แล้ว terminate เพื่อ reconnect ทันที ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 > - ไม่รอ TCP timeout
 >
 > **Cloudflare Durable Objects:**
-> - ตรวจสอบ WebSocket activity ทุก 60 วินาที
-> - ถ้าไม่มี activity → close connection เพื่อประหยัด resource
+> - runtime จะ hibernate Durable Object หลังไม่มี event เข้ามาประมาณ 10 วินาที (ไม่ใช่ 60 วินาทีตามที่เข้าใจกันทั่วไป) — client ที่ใช้ Hibernation WebSocket API ยังต่อ connection ค้างไว้ได้แม้ object จะ sleep ไปแล้ว ([Cloudflare Durable Objects — WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/))
 
 | Dead Connection Scenario | สาเหตุ | Detection Method |
 |---|---|---|
@@ -159,7 +158,7 @@ export const deadDetectCode = `(function () {
 | Process crash | browser tab close, app kill | OS ส่ง TCP RST — `onclose` fire |
 | Server-side timeout | server close idle connection | Close frame opcode |
 
-## ข้อผิดพลาดที่พบบ่อย
+## ข้อผิดพลาดที่พบบ่อยเพิ่มเติม
 
 **เชื่อ TCP Connected ว่า Application Connected**
 อาการ:
@@ -176,12 +175,12 @@ export const deadDetectCode = `(function () {
 > 💡 ตัวอย่างจากของจริง
 >
 > **AWS API Gateway WebSocket:**
-> - ตั้ง idle connection timeout — ปิด connection ที่ไม่มี message นาน 10 นาที
-> - แอปต้องส่ง heartbeat ถ้าต้องการ connection ค้างนาน
+> - idle connection timeout ตายตัวที่ 10 นาที (เพิ่มไม่ได้) และ connection lifetime สูงสุด 2 ชั่วโมง ([AWS Docs — WebSocket API quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html))
+> - แอปต้องส่ง heartbeat ถี่กว่า 10 นาทีเสมอถ้าต้องการ connection ค้างนาน
 >
 > **nginx WebSocket proxy:**
-> - `proxy_read_timeout 3600s` — เพิ่ม timeout สำหรับ long-lived WebSocket connection
-> - ถ้าไม่ตั้ง → nginx ปิด connection ทุก 60 วินาที (default)
+> - `proxy_read_timeout` default คือ 60 วินาที — ต้องตั้งเป็น `proxy_read_timeout 3600s` (หรือมากกว่า) สำหรับ WebSocket ที่เปิดค้างนาน ([nginx — proxy_read_timeout](https://www.getpagespeed.com/server-setup/nginx/nginx-timeout))
+> - ถ้าไม่ตั้ง → nginx ปิด connection idle ทุก 60 วินาที (ตรงกับที่ระบุไว้ข้างต้น)
 
 <Callout title="การตรวจจับในหนึ่งบรรทัด">
 Connection ตายเมื่อ pong ที่ค้างอยู่ไม่มาถึงก่อน deadline นับจำนวนการ miss ข้ามเกณฑ์เล็ก ๆ แล้ว **terminate** แทนการ close อย่างสุภาพ — เพราะ half-open peer หายไปแล้วและไม่เหลือใครให้ handshake ด้วย

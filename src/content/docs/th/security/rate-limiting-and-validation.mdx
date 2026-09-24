@@ -120,13 +120,12 @@ export const bucketDemoCode = `(function () {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Discord:**
-> - rate limit message: 5 message ต่อ 5 วินาทีต่อ user
-> - ส่งเกิน → 4008 opcode (Rate limited) → client ต้องรอก่อน retry
+> **Discord Gateway:**
+> - จำกัด 120 event ต่อ 60 วินาทีต่อ connection ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+> - ส่งเกิน → close code 4008 (Rate limited) → client ต้อง reconnect แล้วช้าลง
 >
-> **Binance WebSocket:**
-> - connection rate limit ต่อ IP
-> - subscription limit: subscribe ได้สูงสุด N stream ต่อ connection
+> **Binance WebSocket Streams:**
+> - จำกัด 5 คำสั่ง subscribe/unsubscribe ต่อวินาทีต่อ connection, สูงสุด 1024 stream ต่อ connection, และ 300 ครั้งที่พยายามเชื่อมต่อต่อ 5 นาทีต่อ IP ([Binance API Docs — Rate limits](https://developers.binance.com/docs/binance-spot-api-docs/websocket-api/rate-limits))
 
 <Callout title="จำกัดทั้ง rate และรูปร่าง ราย connection">
 WebSocket ไม่มี throttle ในตัว ดังนั้นเพิ่มเข้าไป: **token bucket ราย connection** จำกัดจำนวน message ที่ client ส่งได้, **size cap** (ใช้ `maxPayload` ของ library) หยุด frame ที่ใหญ่เกิน, และ **การ parse แบบ `try/catch` บวกกับ validate รูปร่าง** หยุด frame ที่ผิดรูป ใช้ทั้งสามอย่างกับทุก connection — client ที่ใช้งานในทางที่ผิดหนึ่งตัวต้องไม่มีทางทำให้ตัวอื่นอดอยากได้เลย

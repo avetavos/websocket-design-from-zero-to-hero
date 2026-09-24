@@ -137,12 +137,10 @@ ws.on('error', (err) => console.error('socket error:', err.message));`;
 > 💡 ตัวอย่างจากของจริง
 >
 > **Socket.IO:**
-> - popular WebSocket library สำหรับ Node.js — abstracts server-side handling
-> - ใช้ใน Trello, Notion สำหรับ real-time collaboration
+> - library ยอดนิยมสำหรับทำ real-time server บน Node.js — ครอบ raw WebSocket ด้วย room, namespace, และ automatic fallback ให้ (ตัดชื่อบริษัทลูกค้าทิ้ง เพราะ Trello เคยใช้แล้วย้ายออกเมื่อ scale เกิน ~10,000 connection ต่อ process และ Notion ไม่พบแหล่งอ้างอิงปฐมภูมิว่าใช้จริง)
 >
 > **uWebSockets.js:**
-> - high-performance WebSocket server ที่ Binance และ trading platform ใช้
-> - handle 1M+ concurrent connection บน hardware เดียว
+> - benchmark อย่างเป็นทางการวัดได้ throughput และจำนวน concurrent connection สูงกว่า Socket.IO หลายเท่าบน hardware เดียวกัน ([uNetworking/uWebSockets — benchmarks](https://github.com/uNetworking/uWebSockets/blob/master/benchmarks/README.md)) — ไม่ระบุตัวเลข "1M+" หรือชื่อ Binance เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยัน
 
 <Callout title="ws server ในสามบรรทัด">
 สร้าง server ด้วย `new WebSocketServer({ port })` หรือ `{ server }` เพื่อใช้ HTTP port ร่วมกัน จัดการ client แต่ละรายใน `wss.on('connection', (ws, req) => ...)` ภายในนั้น `ws.on('message', ...)` รับ frame (เป็น Buffer — เรียก `.toString()`) และ `ws.send(...)` push ข้อมูลกลับ

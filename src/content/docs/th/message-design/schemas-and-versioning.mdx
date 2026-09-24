@@ -137,11 +137,11 @@ message v1 และ message v2 ไหลผ่าน `handleChat` *เดีย
 > 💡 ตัวอย่างจากของจริง
 >
 > **Discord Gateway:**
-> - ทุก event มี `op` (opcode), `d` (data), `s` (sequence), `t` (event name)
+> - ทุก event มี `op` (opcode), `d` (data), `s` (sequence), `t` (event name) ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 > - envelope สม่ำเสมอ — client dispatch ตาม `op` ก่อนแล้วดู `t`
 >
 > **Twitch EventSub:**
-> - ทุก message มี `metadata.message_type` และ `metadata.message_id`
+> - ทุก message มี `metadata.message_type` และ `metadata.message_id` ([Twitch Developers — EventSub WebSocket reference](https://dev.twitch.tv/docs/eventsub/websocket-reference/))
 > - version field ใน subscription type — รองรับหลาย version พร้อมกัน
 
 <Callout title="ใจความสำคัญในหนึ่งบรรทัด">

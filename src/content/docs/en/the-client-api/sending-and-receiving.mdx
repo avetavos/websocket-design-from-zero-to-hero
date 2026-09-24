@@ -123,6 +123,28 @@ export const sendRecvCode = `(function () {
 
 Notice the first attempt — `too early` — is blocked because the socket is still `CONNECTING`. Then, once open, the three numbered messages come back as `1`, `2`, `3`, in exactly the order they were sent. That is `send()`, the `message` event, the OPEN-only rule, and ordering, all in one run.
 
+## Common mistakes
+
+**Parsing JSON on every message with no error handling**
+Symptoms:
+- `JSON.parse(event.data)` with no try/catch
+- The server sends malformed JSON and the app crashes
+- Wrap it: `try { const msg = JSON.parse(event.data); } catch (e) { console.error('Invalid message', e) }`
+
+**Sending large messages in a loop without checking bufferedAmount**
+Symptoms:
+- A loop sends 1,000 frames back-to-back — the buffer overflows
+- `ws.bufferedAmount` climbs very high — a memory spike
+- Check `ws.bufferedAmount < threshold` before sending the next message
+
+> 💡 Real-world example
+>
+> **The general pattern chat apps use (the same shape Slack's legacy RTM API followed):**
+> - Receive messages as JSON, e.g. `{ "type": "message", "text": "Hello", "channel": "C1234" }`, and dispatch on the `type` field — event-driven message handling
+>
+> **Google Docs:**
+> - Uses Operational Transformation (OT) — sends operations to the server and applies the updates it gets back to the local document state ([Wikipedia — Operational transformation](https://en.wikipedia.org/wiki/Operational_transformation))
+
 <Callout title="The two directions, three rules">
 Send with `ws.send(data)`; receive on `event.data` inside `onmessage`. You may only send while `OPEN` (sending earlier throws, later is dropped), delivery preserves send order over the single TCP connection, but the API never pairs replies to requests — add your own correlation id if you need that.
 </Callout>

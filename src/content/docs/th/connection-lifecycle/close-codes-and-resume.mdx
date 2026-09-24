@@ -167,12 +167,11 @@ export const resumeCode = `(function () {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Discord:**
-> - code 4xxx เช่น 4000 (Unknown), 4007 (Invalid seq) — app แยกว่าควร resume หรือ reconnect fresh
+> **Discord Gateway:**
+> - close code 4xxx เช่น 4000 (Unknown error), 4007 (Invalid seq), 4009 (Session timed out) — app ใช้ code แยกว่าควร resume หรือ reconnect fresh ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 >
-> **Slack RTM:**
-> - server ส่ง `goodbye` message ก่อน close — client รู้ว่าเป็น intentional
-> - reconnect พร้อม last event timestamp เพื่อ replay missed messages
+> **Slack (Legacy RTM API, deprecated):**
+> - เคยส่ง `goodbye` message ก่อน close เพื่อให้ client รู้ว่าเป็น intentional close ไม่ใช่ connection ขาด
 
 <Callout title="Close และ resume ในหนึ่งบรรทัด">
 Close อย่างสะอาดด้วย **code** (1000 = ตั้งใจ, 1006 = พังกลางทาง, 4000+ = ความหมายของคุณเอง) เพื่อให้อีกฝ่ายรู้ว่าควร reconnect หรือไม่ จากนั้นแค่ประทับ id ให้ message และจำ **last-seen id** ไว้ client ที่กำลัง reconnect ก็เล่นซ้ำเฉพาะส่วนที่พลาดไปได้พอดี — ปิดลูปของวงจรชีวิตทั้งหมด

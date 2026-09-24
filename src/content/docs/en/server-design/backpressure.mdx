@@ -116,6 +116,29 @@ ws.on('error', () => clearInterval(timer));`;
 
 A healthy client drains fast enough that `bufferedAmount` stays near zero and almost nothing is dropped. Throttle the consumer and you would see `dropped` climb while memory stays flat — which is the whole point. Note the `clearInterval` on `close`: an orphaned producer that keeps running after the client left is its own kind of leak. Protecting the server's memory is the last responsibility of a WebSocket server, and the one that decides whether it survives a bad network day.
 
+## Common mistakes
+
+**Not checking `ws.bufferedAmount` before sending**
+Symptoms:
+- Sending messages back-to-back without waiting for the buffer to drain
+- `bufferedAmount` keeps climbing — a memory leak
+- Check `bufferedAmount < THRESHOLD` before sending, or use the `drain` event
+
+**Dropping messages without telling the client**
+Symptoms:
+- The server drops messages when the queue is full, and the client has no idea
+- The client just sees data go missing with no explanation
+- Send a signal back to the client on drop: `{ type: "overflow", dropped: N }`
+
+> 💡 Real-world example
+>
+> **The general shape of a market-data feed (an exchange's WebSocket, for example):**
+> - Sends price ticks at very high frequency — if a client falls behind, it's fine to drop stale, superseded updates rather than let the queue back up (no specific interval is claimed here, since no primary source confirms one)
+> - The client always sees the current price, even if it missed some updates along the way
+
+**Google Docs:**
+- Uses Operational Transformation (OT) with an append-only revision log as the source of truth — backpressure at that log/queue level matters a lot once multiple clients send operations concurrently ([Wikipedia — Operational transformation](https://en.wikipedia.org/wiki/Operational_transformation))
+
 <Callout title="Bound every client's buffer">
 `ws.send` returns immediately and queues unsent bytes in your process — a slow client grows that queue without limit. Watch `ws.bufferedAmount`, and at a high-water mark **drop** stale updates, **coalesce** to the latest, apply **flow control** via the send callback, or **disconnect** a hopeless client. The goal is always a bounded per-client buffer so one slow reader can never exhaust server memory.
 </Callout>

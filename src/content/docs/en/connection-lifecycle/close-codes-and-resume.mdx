@@ -144,6 +144,28 @@ export const resumeCode = `(function () {
 
 Watch the order: the client receives messages 1 and 2 live, then the connection drops (code 1006) while message 3 is still queued on the server. The client reconnects, sends `lastSeenId=2`, and the server replays *only* message 3 — no gap, no duplicate of 1 or 2. That seamless catch-up is what every well-built real-time app does behind the scenes, and it is only possible because reconnection and a last-seen id work together.
 
+## Common mistakes
+
+**Reconnecting on code 1000**
+Symptoms:
+- Reconnect logic doesn't distinguish 1000 from 1006
+- A user logs out, and the app just reconnects in a loop
+- Check `code === 1000` and stop reconnecting; `code === 1006` and reconnect with backoff
+
+**Not tracking a last-seen ID — data goes missing**
+Symptoms:
+- Reconnecting without requesting the messages that were missed
+- The user sees a gap in the real-time data
+- Send `lastSeenId` on reconnect so the server can replay missed messages
+
+> 💡 Real-world example
+>
+> **Discord Gateway:**
+> - Uses 4xxx close codes like 4000 (Unknown error), 4007 (Invalid seq), and 4009 (Session timed out) so the app can tell whether to resume or reconnect fresh ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+>
+> **Slack (legacy RTM API, deprecated):**
+> - Used to send a `goodbye` message before closing, so the client would know the close was intentional rather than a dropped connection
+
 <Callout title="Close and resume in one line">
 Close cleanly with a **code** (1000 = on purpose, 1006 = it broke, 4000+ = your own meaning) so the other side knows whether to reconnect. Then, by stamping messages with ids and remembering the **last-seen id**, a reconnecting client replays exactly what it missed — closing the loop on the whole lifecycle.
 </Callout>

@@ -161,11 +161,10 @@ log พิสูจน์ประเด็นนี้: message ของ clien
 > 💡 ตัวอย่างจากของจริง
 >
 > **Pusher:**
-> - ใช้ Redis pub/sub backplane ระหว่าง instance — message publish ครั้งเดียว ถึง subscriber ทั้งหมด
+> - ผลิตภัณฑ์ managed WebSocket ที่ใช้ pub/sub backplane ระหว่าง instance — publish ครั้งเดียว กระจายถึง subscriber ทั้งหมด
 >
 > **Ably:**
-> - multi-region backplane — publish ใน region Asia ถึง subscriber ใน region EU
-> - real-time event routing ข้าม data center
+> - deploy production cluster ข้าม 7 region ทั่ว US, Europe, และ Asia-Pacific — publish ใน region หนึ่งกระจายถึง subscriber ใน region อื่นได้ ([Ably — Platform architecture](https://ably.com/docs/platform/architecture))
 
 <Callout title="แบบจำลองทางความคิด">
 เลิกคิดว่า "ส่งให้ client ทุกตัว" แล้วเริ่มคิดว่า "publish event ออกไป แล้วแต่ละ instance ส่งให้ client ของตัวเอง" backplane เปลี่ยน broadcast ที่เข้าไม่ถึงหนึ่งครั้งให้กลายเป็น local broadcast หลายครั้ง หนึ่งครั้งต่อ instance — และเพราะ publisher เป็น subscriber ด้วย คุณจึงเขียนตรรกะการส่งเพียงครั้งเดียวเท่านั้น

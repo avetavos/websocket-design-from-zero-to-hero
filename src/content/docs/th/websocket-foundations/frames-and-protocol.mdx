@@ -89,12 +89,11 @@ URL scheme สองแบบ สะท้อนเว็บเป๊ะ ๆ:
 > 💡 ตัวอย่างจากของจริง
 >
 > **Google Meet:**
-> - ใช้ Binary frame สำหรับ video/audio data (VP8, Opus codec)
-> - ใช้ Text frame สำหรับ control message (mute, chat, participant list)
+> - ใช้ Binary frame สำหรับ video/audio data ผ่าน WebRTC (codec เช่น VP8, Opus)
+> - ใช้ Text frame (JSON) สำหรับ control message เช่น mute, chat, participant list
 >
-> **Figma:**
-> - ส่ง cursor position และ selection state เป็น Binary frame (Protobuf)
-> - ลด payload size เมื่อเทียบกับ JSON text frame ได้ถึง 60%
+> **หลักการทั่วไป (แนวเดียวกับที่ multiplayer/design tool หลายเจ้าใช้):**
+> - ส่ง cursor position และ selection state เป็น Binary frame แทน JSON — ลด parsing overhead ของ event ที่ยิงถี่มาก (ไม่มีตัวเลขเปอร์เซ็นต์ที่ยืนยันแหล่งอ้างอิงปฐมภูมิได้ จึงไม่ระบุ)
 
 <Callout title="บทสรุปของ frame layer">
 หลัง handshake ข้อมูลเดินทางในรูปของ **frame** ที่มี opcode สำหรับ text, binary, ping/pong และ close frame จาก client ไป server ถูก **mask** ข้อความสามารถถูก **fragment** ได้ และโปรดักชันใช้ **`wss://`** (TLS) `WebSocket` API ทำสิ่งเหล่านี้ทั้งหมดให้คุณ — คุณทำงานในระดับข้อความ ไม่ใช่ frame

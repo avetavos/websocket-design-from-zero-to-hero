@@ -135,6 +135,29 @@ ws.on('error', leaveRoom);`;
 
 With two clients joined to the same room, a `say` from one arrives at the other but not back at the sender (we passed `ws` as the `except` argument). A third client in a different room hears nothing. That targeted fan-out — backed by a `Map` of `Set`s and disciplined cleanup — is the core engine of every chat, presence, and live-collaboration feature you will build.
 
+## Common mistakes
+
+**Broadcasting every message to every connection**
+Symptoms:
+- The server loops over every connection on every message
+- 10,000 connections times 100 messages/s means 1M unnecessary iterations per second
+- Use a room/channel pattern — send only to the connections that subscribed
+
+**A room that isn't cleaned up when a user leaves**
+Symptoms:
+- The user disconnects but is still in the room set
+- Messages get broadcast to a dead connection — an error every time
+- Always remove from the room in the `close` event
+
+> 💡 Real-world example
+>
+> **Discord:**
+> - room = channel — messages broadcast only to members who joined that channel, following the Gateway's guild/channel model ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+>
+> **The general shape collaborative editors use (the same idea Figma follows):**
+> - room = document — cursor and selection updates broadcast only to users who have that document open
+> - a user leaving the document is removed from the room automatically
+
 <Callout title="Everyone vs a room">
 `wss.clients` is the set of all sockets — iterate it (guarding on `readyState === OPEN`) to broadcast to everyone. For targeted delivery, keep a `Map<room, Set<ws>>`, fan out only to that room's members, optionally skipping the sender, and remove sockets from their room on close.
 </Callout>

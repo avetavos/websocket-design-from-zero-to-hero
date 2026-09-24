@@ -81,13 +81,12 @@ WebSocket ก็เปิดการเชื่อมต่อเส้นเ�
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Twitter/X:**
-> - ใช้ SSE สำหรับ notification และ timeline update (server → client only)
-> - WebSocket สำหรับ DM real-time chat (bidirectional)
+> **หลักการเลือกที่ทีมจริงใช้ (ไม่มีตัวเลข/ชื่อบริษัทที่หาแหล่งอ้างอิงปฐมภูมิยืนยันได้):**
+> - feature ที่เป็น server → client อย่างเดียว (notification, live feed) มักเลือก SSE เพราะ auto-reconnect มาให้ฟรีและทำงานบน HTTP ปกติ
+> - feature ที่ต้อง bidirectional จริง (chat, DM แบบ real-time) ต้องใช้ WebSocket
 >
-> **Intercom:**
-> - เริ่มจาก long polling สำหรับ chat widget
-> - migrate ไป WebSocket เมื่อ user load เพิ่มขึ้น — ลด server connection overhead 80%
+> **แนวโน้มทั่วไปที่พบบ่อยในโปรดักต์ chat:**
+> - เริ่มจาก long polling ก่อนเพราะ implement ง่ายกว่า แล้ว migrate ไป WebSocket เมื่อ connection/server load จาก polling เริ่มเป็นคอขวด
 
 <Callout title="ความแตกต่างที่ทำให้คนสะดุด">
 **SSE เป็น server → client เท่านั้น** **WebSocket เป็นสองทิศทาง** ถ้า client ของคุณไม่จำเป็นต้อง push ผ่านช่องเดียวกันเลย SSE อาจเป็นทั้งหมดที่คุณต้องการ แต่เมื่อใดที่คุณต้องการทราฟฟิกสองทางอย่างแท้จริง ให้เอื้อมไปหา WebSocket

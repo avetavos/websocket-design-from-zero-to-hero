@@ -113,6 +113,28 @@ ws.on('error', (err) => console.error('socket error:', err.message));`;
 
 Each message you send comes back numbered — proof the `count` variable lives for the lifetime of that one connection, not per message. That per-socket scope is exactly what the next lesson turns into useful per-connection **state**.
 
+## Common mistakes
+
+**Doing CPU-intensive work directly in the message handler**
+Symptoms:
+- Parsing, validating, and processing a complex message right inside `ws.on('message', ...)`
+- Blocks the event loop — every other connection waits too
+- Move heavy work to a worker thread or a job queue
+
+**Not setting a max connection limit**
+Symptoms:
+- The server accepts unlimited connections — it runs out of memory once there are enough
+- An OOM crash disconnects every user at once
+- Set a max connection count and reject with 503 once it's hit
+
+> 💡 Real-world example
+>
+> **Socket.IO:**
+> - A popular Node.js real-time server library — wraps raw WebSocket with rooms, namespaces, and automatic fallback (customer names are omitted here: Trello used it and later moved off once it scaled past roughly 10,000 connections per process, and no primary source confirms Notion using it)
+>
+> **uWebSockets.js:**
+> - Official benchmarks show it handling far higher throughput and connection counts than Socket.IO on the same hardware ([uNetworking/uWebSockets — benchmarks](https://github.com/uNetworking/uWebSockets/blob/master/benchmarks/README.md)) — no "1M+" figure or Binance attribution is claimed, since no primary source confirms either
+
 <Callout title="The ws server in three lines">
 Create a server with `new WebSocketServer({ port })` or `{ server }` to share an HTTP port. Handle each client in `wss.on('connection', (ws, req) => ...)`. Inside, `ws.on('message', ...)` receives frames (as Buffers — call `.toString()`) and `ws.send(...)` pushes data back.
 </Callout>

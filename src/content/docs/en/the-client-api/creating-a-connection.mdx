@@ -109,6 +109,30 @@ export const createEchoCode = `(function () {
 
 The first log proves construction returned with `readyState` still `0`. Only later, inside `onopen`, is the connection usable — and the negotiated subprotocol is available there as `ws.protocol`.
 
+## Common mistakes
+
+**Sending a message before the connection is OPEN**
+Symptoms:
+- `ws.send(data)` right after `new WebSocket(url)` — it isn't OPEN yet
+- Throws an `InvalidStateError` — the message is lost
+- Always send inside `ws.onopen`, or queue messages and flush them once it's open
+
+**Not handling connection errors**
+Symptoms:
+- No `ws.onerror` handler at all
+- The connection fails with no visible reason — bad UX
+- Implement `onerror` and `onclose` that log the error and trigger a reconnect
+
+> 💡 Real-world example
+>
+> **Discord Gateway:**
+> - The official docs recommend `wss://gateway.discord.gg/?v=10&encoding=json` (specifying both the version and the encoding) ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+> - Retries with exponential backoff if the connection fails
+>
+> **Binance WebSocket Streams:**
+> - Connects to `wss://stream.binance.com:9443/stream` ([Binance API Docs — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams))
+> - Needs automatic reconnect on drop, since the server forces a disconnect every 24 hours regardless
+
 <Callout title="Constructor checklist">
 Prefer `wss://` everywhere but local testing; pass subprotocols as a preference-ordered array and read the winner from `ws.protocol`; and remember the constructor returns instantly in `CONNECTING` — wait for `onopen` before you send.
 </Callout>

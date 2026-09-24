@@ -89,13 +89,11 @@ export const handshakeDiagram = `sequenceDiagram
 > 💡 ตัวอย่างจากของจริง
 >
 > **Binance WebSocket API:**
-> - ใช้ WSS handshake บน `wss://stream.binance.com:9443`
-> - validate API key ใน handshake ก่อน accept connection
-> - reject ด้วย HTTP 401 แทนการรับแล้ว close ทีหลัง
+> - endpoint จริงคือ `wss://stream.binance.com:9443` ([Binance API Docs — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams))
+> - stream ที่ต้องใช้ข้อมูลบัญชี (user data stream) ต้อง validate API key ก่อนอนุญาตให้ subscribe
 >
-> **GitHub Copilot:**
-> - handshake ผ่าน HTTPS/WSS ที่ port 443
-> - ใช้ corporate proxy ที่รู้จัก Upgrade header ได้
+> **หลักการทั่วไป:**
+> - proxy หรือ corporate firewall ต้องรู้จัก header `Upgrade`/`Connection` ระหว่าง handshake มิฉะนั้น connection จะถูกปฏิบัติเหมือน HTTP ธรรมดาแล้วบล็อก
 
 <Callout title="สิ่งที่ต้องจำ">
 WebSocket **เริ่มต้นในฐานะ HTTP GET** ที่แบก `Upgrade: websocket` และ server ตอบ `101 Switching Protocols` หลังจากนั้น TCP connection เดิมเป๊ะ ๆ จะถูกนำกลับมาใช้ซ้ำ — ไม่มีการเชื่อมต่อใหม่ — เพื่อขนส่ง WebSocket frame ในทั้งสองทิศทาง

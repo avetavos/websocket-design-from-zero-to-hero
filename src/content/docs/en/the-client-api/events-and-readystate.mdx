@@ -117,6 +117,28 @@ export const stateEchoCode = `(function () {
 
 Trace the output against the diagram: `CONNECTING` at construction, `OPEN` in the `open` handler, still `OPEN` when the `message` arrives, `CLOSING` the moment `close()` is called, and `CLOSED` by the time the `close` event fires — carrying the code `1000` and reason we passed.
 
+## Common mistakes
+
+**Sending a message when readyState isn't OPEN**
+Symptoms:
+- `ws.send(data)` in an event handler with no state check
+- The CLOSING state throws an error
+- Always check before sending: `if (ws.readyState === WebSocket.OPEN) ws.send(data)`
+
+**Not distinguishing onerror from onclose**
+Symptoms:
+- Only handling `onclose` — no way to tell whether it closed from an error or normally
+- `onerror` always fires before `onclose` when there's an error
+- Log in `onerror` to know why, and reconnect in `onclose`
+
+> 💡 Real-world example
+>
+> **The general pattern for a real-time terminal/editor over WebSocket (no specific product is named here, since no primary source confirms the internal mechanism):**
+> - Check readyState before sending input on every keystroke — while still CONNECTING, queue the keystroke and flush it once OPEN
+>
+> **The pattern multiplayer editors use (the same idea Figma follows):**
+> - Show a "Reconnecting..." UI when readyState moves from OPEN to CLOSED, so the user knows the connection dropped and is being restored
+
 <Callout title="The two views, one truth">
 Four events tell you *when* the connection changes; `readyState` (0/1/2/3, or the named constants) tells you *where* it is right now. Guard your sends with `readyState === WebSocket.OPEN`, and read `code` and `reason` off the `close` event to learn why it ended.
 </Callout>

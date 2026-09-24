@@ -142,6 +142,27 @@ ws.on('error', cleanup);
 
 Each reply echoes the socket's current subscription list — state that persists across messages and belongs to that one connection. When the client disconnects, the `cleanup` line proves the teardown ran. Keep that discipline and your server's memory stays bounded no matter how many clients come and go.
 
+## Common mistakes
+
+**Storing too much state on every connection**
+Symptoms:
+- Storing the full user profile, permission list, and history in the connection object
+- 10,000 connections means 10,000 copies of the same data
+- Store just an identifier on the connection; fetch data from a shared store when needed
+
+**State that isn't cleaned up on disconnect**
+Symptoms:
+- The connection disconnects but its state stays in the in-memory map
+- Memory leak — the server slows down over time
+- Always implement `ws.on('close', () => { connections.delete(userId) })`
+
+> 💡 Real-world example
+>
+> **The general shape large chat gateways use (no specific store is named, since no primary source confirms the internal infrastructure details):**
+> - Store only connection-level identifiers: userId, the relevant guild/workspace id, and the channels it's subscribed to
+> - Session state that must survive a reconnect lives in an external session store, decoupled from the connection's own process — not tied to a process that disappears on restart
+> - Heavy data (full profile, history) stays in the primary database and is queried on demand, never cached on the connection object
+
 <Callout title="State in, state out">
 Resolve identity **once** at connect time and attach state (user id, subscriptions) to the socket or a side-table `Map`. Mutate it as messages arrive — and remove **every** piece of it on `close` *and* `error`. Un-cleaned state is a memory leak and a source of ghost broadcasts.
 </Callout>

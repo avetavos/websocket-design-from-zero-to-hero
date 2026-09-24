@@ -99,6 +99,30 @@ wss.on('connection', (ws, req) => {
 
 The handshake timeout itself lives one level up, on the HTTP server (`server.headersTimeout` / `server.requestTimeout`), so a slowloris upgrade is dropped before it ever reaches this handler. Together these bound *how many* connections exist, *how long* an unfinished one may linger, and *how long* an idle one survives — closing the last gaps an attacker could exploit.
 
+## Common mistakes
+
+**Using `ws://` in production**
+Symptoms:
+- Messages travel over the network unencrypted
+- An attacker on the same network (café wifi) can sniff the traffic
+- Always use `wss://` (WebSocket Secure) in production
+
+**No DDoS protection on the WebSocket endpoint**
+Symptoms:
+- An attacker opens huge numbers of WebSocket connections from many IPs
+- The server runs out of file descriptors — legitimate users can't connect
+- Put Cloudflare, AWS Shield, or an nginx rate limit in front of the `/ws` endpoint
+
+> 💡 Real-world example
+>
+> **Cloudflare (WebSocket support):**
+> - Terminates TLS at the edge — `wss://` reaches Cloudflare, then continues over its internal network ([Cloudflare — WebSockets](https://developers.cloudflare.com/network/websockets/))
+> - Ships DDoS protection built in, absorbing a connection flood before it ever reaches the origin server
+>
+> **Discord Gateway:**
+> - Always uses `wss://` — every message is encrypted on the wire ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+> - Per-connection rate limits (see the rate-limiting lesson) cap the blast radius of abuse
+
 <Callout title="Encrypt everything; reject cheaply, allocate late">
 Run only on **`wss`/TLS**. Bound connections, not just messages: **limit connections per IP**, **time out slow/unfinished handshakes** (slowloris), and use a **heartbeat with an idle timeout** to reclaim dead sockets. Above all, **authenticate before you allocate** — every per-connection resource should be spent only after the origin and credential have passed, so a rejected attacker costs you almost nothing.
 </Callout>

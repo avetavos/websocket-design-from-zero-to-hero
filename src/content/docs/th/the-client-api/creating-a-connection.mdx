@@ -132,13 +132,13 @@ export const createEchoCode = `(function () {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Discord Web App:**
-> - `new WebSocket('wss://gateway.discord.gg/?v=10')` ตอน app load
+> **Discord Gateway:**
+> - URL ที่ official docs แนะนำคือ `wss://gateway.discord.gg/?v=10&encoding=json` (ต้องระบุทั้ง version และ encoding) ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
 > - หาก connect fail → retry ด้วย exponential backoff
 >
-> **Binance Web Trading:**
-> - connect ไปยัง `wss://stream.binance.com:9443/stream`
-> - reconnect อัตโนมัติเมื่อ connection drop — trader ไม่ miss price update
+> **Binance WebSocket Streams:**
+> - connect ไปยัง `wss://stream.binance.com:9443/stream` ([Binance API Docs — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams))
+> - ต้อง reconnect อัตโนมัติเมื่อ connection drop เพราะ server จะตัด connection ทุก 24 ชั่วโมงแน่นอน
 
 <Callout title="เช็กลิสต์ของ constructor">
 ใช้ `wss://` ทุกที่ยกเว้นการทดสอบในเครื่อง; ส่ง subprotocol เป็นอาร์เรย์ที่เรียงตามลำดับความชอบและอ่านตัวที่ชนะจาก `ws.protocol`; และจำไว้ว่า constructor คืนค่าทันทีในสถานะ `CONNECTING` — รอ `onopen` ก่อนที่คุณจะส่ง

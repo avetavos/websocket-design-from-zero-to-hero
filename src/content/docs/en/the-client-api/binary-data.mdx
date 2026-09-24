@@ -140,6 +140,29 @@ export const binaryEchoCode = `(function () {
 
 The four bytes go out as a binary frame and come back as an `ArrayBuffer` — because we set `binaryType = 'arraybuffer'` — which we then read through a `Uint8Array`. Had we left `binaryType` at its `'blob'` default, `event.data` would have been a `Blob` to read asynchronously instead.
 
+## Common mistakes
+
+**Forgetting to set binaryType before onopen**
+Symptoms:
+- A binary message arrives but `event.data` is a Blob instead of an ArrayBuffer
+- Code tries `new Uint8Array(event.data)` and fails, because a Blob isn't an ArrayBuffer
+- Set `ws.binaryType = 'arraybuffer'` right after the constructor, before `onopen`
+
+**Not checking bufferedAmount — sending too fast**
+Symptoms:
+- A loop sends large chunks back-to-back — `bufferedAmount` spikes
+- Client-side memory bloats, and the network can time out
+- Always check `if (ws.bufferedAmount < threshold)` before sending the next chunk
+
+> 💡 Real-world example
+>
+> **The pattern several exchange WebSocket APIs use (Binance and Bybit, for example; no specific "X times more compact than JSON" figure is claimed, since no primary source confirms one):**
+> - Some endpoints support sending market data as binary instead of JSON — parsed with `binaryType = 'arraybuffer'` plus `DataView` for low-latency parsing
+>
+> **The general shape multiplayer apps use (the same idea Figma follows):**
+> - Sends drawing operations as binary frames
+> - Checks `bufferedAmount` before sending a batch operation to avoid lag
+
 <Callout title="Binary in one breath">
 Pass a string for a text frame, or an `ArrayBuffer` / `TypedArray` / `Blob` for a binary frame. On receive, set `ws.binaryType` to `'arraybuffer'` (sync, byte-level reads) or `'blob'` (the default), and branch in `onmessage` on the type of `event.data`. When streaming, throttle on `ws.bufferedAmount` so the outbound buffer never runs away.
 </Callout>

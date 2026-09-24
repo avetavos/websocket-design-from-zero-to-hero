@@ -135,13 +135,9 @@ client ของ starter เปิดด้วย origin แบบ localhost แ
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **GitHub Codespaces:**
-> - validate Origin + token ระหว่าง handshake
-> - reject immediately ด้วย 1008 ถ้า token หมดอายุ — ไม่จัดสรร resource
->
-> **Stripe Dashboard:**
-> - WebSocket ใช้ session cookie authentication
-> - validate Origin เทียบกับ `dashboard.stripe.com` domain allowlist
+> **หลักการทั่วไปที่ผลิตภัณฑ์ authenticated WebSocket ใช้ (ไม่ระบุชื่อบริษัท เพราะไม่พบแหล่งอ้างอิงปฐมภูมิที่ยืนยันกลไกภายในได้):**
+> - validate ทั้ง `Origin` header และ token ระหว่าง handshake ก่อนตอบ 101 เสมอ
+> - ถ้า token invalid/expired ให้ reject ทันทีโดยยังไม่จัดสรร resource ใด ๆ ให้ connection นั้น — ดีกว่ายอมรับแล้วมาปิดทีหลัง
 
 <Callout title="ป้องกันประตู แล้วค่อยไว้ใจห้อง">
 handshake คือช่วงเดียวที่คุณมี HTTP header, cookie, และวิธีปฏิเสธอย่างสะอาดได้อย่างราคาถูก ตรวจ `Origin` เทียบกับ allowlist, validate credential (cookie, subprotocol token, หรือ first-message token — ไม่ใช่ URL), และปิดความพยายามที่แย่ด้วย **1008** ทุกอย่างหลังจากนี้ขึ้นอยู่กับการตรวจสองอย่างนี้ให้ถูกต้อง

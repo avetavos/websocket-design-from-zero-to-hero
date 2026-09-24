@@ -78,6 +78,28 @@ Now we can state the central problem without hand-waving.
 
 This is not a bug to fix with retries or bigger buffers. It is a structural fact: two processes do not share memory. The only cure is to add a *channel between instances* so a message published anywhere is delivered everywhere — which is exactly the backplane in the next lesson.
 
+## Common mistakes
+
+**Using a single instance for a production WebSocket server**
+Symptoms:
+- 50,000 connections and the server runs out of memory or hits the file descriptor limit
+- A new deploy disconnects every user at once
+- Scale out horizontally and use a backplane for cross-instance messages
+
+**Broadcasting by looping over sockets on a single instance**
+Symptoms:
+- `connections.forEach(conn => conn.socket.send(msg))` — never reaches other instances
+- A user on instance B never gets a message sent from instance A
+- Use a pub/sub backplane (Redis, NATS) so every instance's subscribers listen on the same channel
+
+> 💡 Real-world example
+>
+> **Discord Gateway:**
+> - Uses a pub/sub backplane across instances/regions so a message in a guild reaches every user connected anywhere ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+>
+> **Pusher:**
+> - A managed WebSocket infrastructure product built to scale connections horizontally through a distributed backplane (no specific concurrent-connection figure is claimed, since no primary source confirms one)
+
 <Callout title="Four problems, one root">
 In-memory connection state, a per-connection resource floor, sticky long-lived load, and unreachable clients on other instances all trace back to the same root: each connection — and the knowledge of it — lives inside a single process. Every scaling technique in this module is a way to work around that.
 </Callout>

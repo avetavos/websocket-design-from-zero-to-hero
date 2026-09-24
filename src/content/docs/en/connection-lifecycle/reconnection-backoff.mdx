@@ -132,6 +132,28 @@ export const backoffCode = `(function () {
 
 Watch the `backing off ...ms` numbers climb roughly 100, 200, 400, 800 — capped and randomized by jitter, so they will not be exact powers of two — and then the connection finally holds and the attempt counter resets. That growing, randomized, capped delay is the difference between a client that helps a recovering server and one that buries it.
 
+## Common mistakes
+
+**No jitter — a thundering herd**
+Symptoms:
+- 10,000 clients drop at once and all retry every 5 seconds, at the same time
+- The server gets hammered by a reconnect wave, repeatedly
+- Add `Math.random() * ceiling` so retries spread out
+
+**Not stopping on an intentional close**
+Symptoms:
+- A user logs out, `ws.close(1000)` runs, but the reconnect logic keeps going anyway
+- It loops forever reconnecting something the user doesn't want
+- Check `wasClean` or `code === 1000` and stop reconnecting when it's true
+
+> 💡 Real-world example
+>
+> **Binance WebSocket Streams:**
+> - The server forces a disconnect every 24 hours (warning first with a `serverShutdown` message) and closes the connection if a pong doesn't arrive within a minute of a ping sent every 20 seconds — the client needs reconnect logic ready at all times, not just on error ([Binance API Docs — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams))
+>
+> **The generally accepted principle:**
+> - Combine exponential backoff with randomized jitter so many clients don't retry in synchronized waves (a "thundering herd") — no specific vendor's exact schedule is claimed here, since no primary source confirms one; see the full pattern at [AWS Architecture Blog — Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
+
 <Callout title="Reconnection in one line">
 Never reconnect in a tight loop. Wait longer after each failure (**exponential backoff**), randomize each wait (**jitter**), never exceed a sensible ceiling (**a cap**), reset the counter on success, and stop on a deliberate close.
 </Callout>

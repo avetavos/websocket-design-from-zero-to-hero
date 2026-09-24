@@ -156,12 +156,10 @@ export const backoffCode = `(function () {
 > 💡 ตัวอย่างจากของจริง
 >
 > **Binance WebSocket Streams:**
-> - reconnect ด้วย exponential backoff เมื่อ stream ขาด
-> - cap ที่ 30 วินาที — ไม่รอนานเกินก่อน retry ใหม่
+> - server บังคับตัด connection ทุก 24 ชั่วโมง (ส่ง `serverShutdown` เตือนล่วงหน้า) และปิด connection ถ้าไม่ตอบ pong ภายใน 1 นาทีหลัง ping ทุก 20 วินาที — client ต้องมี reconnect logic พร้อมเสมอ ไม่ใช่แค่ตอน error ([Binance API Docs — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams))
 >
-> **Pusher:**
-> - backoff: 1s, 2s, 4s, 8s, 16s แล้ว cap ที่ 300s
-> - jitter ±20% เพื่อกระจาย reconnect จาก client หลายพัน
+> **หลักการที่ยอมรับกันทั่วไป:**
+> - ใช้ exponential backoff ร่วมกับ jitter แบบสุ่ม เพื่อไม่ให้ client จำนวนมาก retry พร้อมกันเป็นคลื่น ("thundering herd") — ไม่ระบุตัวเลข schedule เจาะจงของผู้ให้บริการรายใดรายหนึ่ง เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยัน ดูหลักการเต็มได้ที่ [AWS Architecture Blog — Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
 
 <Callout title="Reconnection ในหนึ่งบรรทัด">
 อย่า reconnect ในลูปที่กระชั้น รอนานขึ้นหลังจากแต่ละครั้งที่ล้มเหลว (**exponential backoff**) สุ่มแต่ละเวลารอ (**jitter**) อย่าเกินเพดานที่สมเหตุสมผล (**cap**) รีเซ็ตตัวนับเมื่อสำเร็จ และหยุดเมื่อมีการ close อย่างตั้งใจ

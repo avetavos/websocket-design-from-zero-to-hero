@@ -143,8 +143,7 @@ export const rpcDemoCode = `(function () {
 > 💡 ตัวอย่างจากของจริง
 >
 > **tRPC over WebSocket:**
-> - type-safe RPC บน WebSocket — subscription สำหรับ real-time, query/mutation สำหรับ HTTP
-> - Discord, Linear ใช้ pattern คล้ายกันสำหรับ real-time feature
+> - `wsLink` ของ tRPC ให้ type-safe RPC บน WebSocket จริง — ใช้สำหรับ subscription แบบ real-time ส่วน query/mutation ยังไปทาง HTTP ได้ ([tRPC Docs — WebSockets](https://trpc.io/docs/server/websockets)) (ตัดชื่อ Discord/Linear ทิ้ง เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยันว่าใช้ tRPC จริง)
 >
 > **JSON-RPC 2.0 over WebSocket:**
 > - protocol มาตรฐานสำหรับ RPC บน WebSocket

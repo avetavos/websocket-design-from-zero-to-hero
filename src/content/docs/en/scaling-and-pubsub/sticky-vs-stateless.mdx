@@ -87,6 +87,28 @@ The honest summary: stickiness buys you the convenience of trusting in-memory st
 
 Notice the backplane is required in **both** columns. Stickiness routes a client *back* to its instance, but it does nothing to help instance A reach a client on instance B. Stickiness is about reconnection and local state; it is never a substitute for cross-instance fan-out. For most modern real-time systems the recommended default is **stateless instances plus a backplane and shared store**, reserving stickiness for cases where rebuilding per-client state on every reconnect would be genuinely expensive.
 
+## Common mistakes
+
+**Using IP-hash sticky sessions with mobile clients**
+Symptoms:
+- Mobile devices change IP when they switch networks — they don't come back to the same instance
+- In-memory state is lost — the user has to re-authenticate or their state resets
+- Use cookie-based (L7) affinity or go stateless instead
+
+**Not setting `proxy_read_timeout` for WebSocket**
+Symptoms:
+- nginx or an ALB times out an idle WebSocket connection every 60 seconds
+- An idle user (not typing) gets silently disconnected
+- Set `proxy_read_timeout 3600s` and implement a client-side heartbeat
+
+> 💡 Real-world example
+>
+> **Slack (legacy RTM API, deprecated):**
+> - Used sticky sessions — a client stayed pinned to the same gateway instance, cutting handshake overhead on frequent reconnects
+>
+> **The general shape large chat platforms use (the same idea live-chat services follow):**
+> - Use a stateless WebSocket server together with a pub/sub backplane (Redis, for example) instead of sticky sessions — any instance can receive a subscribed channel's messages, which makes autoscaling during big events much easier
+
 <Callout title="Pick one, but keep the backplane">
 Sticky sessions let an instance trust in-memory state by routing each client back to the same place; stateless instances push all state to a shared store so any instance can serve anyone. Either way the load balancer must forward the `Upgrade` header and tolerate idle sockets — and either way you still need the pub/sub backplane, because stickiness never lets one instance reach another's clients.
 </Callout>

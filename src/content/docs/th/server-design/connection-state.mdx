@@ -165,13 +165,10 @@ ws.on('error', cleanup);
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Discord:**
-> - เก็บ userId, guildIds, channel subscriptions ต่อ WebSocket connection
-> - session state ใน Redis — reconnect กลับ session เดิมได้
->
-> **Slack:**
-> - connection state minimal — user identity และ workspace
-> - ข้อมูลหนักอยู่ใน database, query เมื่อต้องการ
+> **หลักการทั่วไปที่ chat gateway ขนาดใหญ่ใช้ (ไม่ระบุ store เจาะจง เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยันรายละเอียด infra ภายใน):**
+> - เก็บแค่ identifier ระดับ connection: userId, guild/workspace id ที่เกี่ยวข้อง, channel ที่ subscribe อยู่
+> - session state ที่ต้องคงอยู่ข้าม reconnect เก็บใน external session store แยกจาก process ของ connection เอง — ไม่ผูกกับ process ที่จะหายไปเมื่อ restart
+> - ข้อมูลที่หนัก (full profile, history) อยู่ใน database หลัก แล้ว query เมื่อต้องการเท่านั้น ไม่แคชไว้ใน connection object
 
 <Callout title="state เข้า, state ออก">
 แก้ identity **หนึ่งครั้ง** ตอน connect แล้วแนบ state (user id, subscriptions) เข้ากับ socket หรือ side-table `Map` mutate state เมื่อข้อความเข้ามา — และลบ **ทุก** ชิ้นส่วนของตัวเองออกตอน `close` *และ* `error` state ที่ไม่ได้ clean up คือ memory leak และเป็นต้นตอของ ghost broadcast

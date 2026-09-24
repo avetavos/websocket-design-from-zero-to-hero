@@ -66,6 +66,28 @@ Notice what the diagram does *not* show: a second connection. After the `101`, t
 
 Because the handshake *is* an HTTP request, a WebSocket connection can ride on ports 80 and 443 alongside normal web traffic, reuse existing TLS for `wss://`, and slip through the proxies and load balancers that already understand HTTP. The protocol gets the reach of the web for free, then sheds HTTP's request/response model the instant it no longer needs it.
 
+## Common mistakes
+
+**Not validating Origin during the handshake**
+Symptoms:
+- Accepting every WebSocket connection without checking the `Origin` header
+- Opens the door to cross-site WebSocket hijacking (CSWSH)
+- Check the `Origin` header against an allowlist before responding with 101
+
+**Authenticating after the connection is already open**
+Symptoms:
+- Accepting the handshake first and authenticating later leaves the connection open, unverified, for a window of time
+- Attach an auth token to the handshake (query param or header) and validate it before responding with 101
+
+> 💡 Real-world example
+>
+> **Binance WebSocket API:**
+> - The real endpoint is `wss://stream.binance.com:9443` ([Binance API Docs — WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams))
+> - Streams that need account data (user data streams) validate the API key before allowing a subscription
+>
+> **General principle:**
+> - A proxy or corporate firewall must understand the `Upgrade`/`Connection` headers during the handshake, or it will treat the request as plain HTTP and block it
+
 <Callout title="The thing to remember">
 A WebSocket **begins as an HTTP GET** carrying `Upgrade: websocket`, and the server answers `101 Switching Protocols`. After that, the very same TCP connection is reused — no reconnect — to carry WebSocket frames in both directions.
 </Callout>

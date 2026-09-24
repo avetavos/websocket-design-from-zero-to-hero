@@ -107,6 +107,29 @@ export const liveEchoCode = `(function () {
 
 The first `received:` line is the server's greeting on connect; the second is our own message echoed back. We close only after the second one — proving the connection stayed open and usable the whole time, which is precisely what HTTP request/response cannot offer.
 
+## Common mistakes
+
+**Using WebSocket for operations HTTP handles better**
+Symptoms:
+- Using WebSocket for form submits, file uploads, or one-off data fetches
+- High complexity with no real-time benefit
+- Only reach for WebSocket when you need server push or bidirectional low latency
+
+**No reconnect logic**
+Symptoms:
+- Connection drops and the app just stops working, silently
+- User has to refresh the page to get back online
+- Implement an `onclose` handler that reconnects automatically with exponential backoff
+
+> 💡 Real-world example
+>
+> **Discord:**
+> - Uses WebSocket as its main Gateway for real-time messages, presence, and voice state signaling ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+>
+> **Slack (legacy RTM API):**
+> - Used to send messages, reactions, and typing indicators over a single WebSocket connection via its Real Time Messaging (RTM) API
+> - Slack has deprecated RTM in favor of Socket Mode / the Events API ([Slack — Legacy RTM API](https://docs.slack.dev/legacy/legacy-rtm-api/))
+
 <Callout title="The one-line takeaway">
 HTTP is a sequence of short, client-asked errands. A WebSocket is one connection that stays open so **either** side can send a message whenever it wants — which is what real-time chat, live feeds, and collaboration actually need.
 </Callout>

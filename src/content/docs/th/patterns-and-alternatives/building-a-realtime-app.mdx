@@ -165,12 +165,10 @@ ws.on('close', () => {
 > 💡 ตัวอย่างจากของจริง
 >
 > **Figma:**
-> - multiplayer collaborative editor บน WebSocket
-> - central server แบบ authoritative resolve การแก้พร้อมกันด้วย last-writer-wins (ไม่ได้ใช้ CRDT หรือ OT) — client ส่ง change ไป server เป็นคนตัดสินค่าสุดท้าย
+> - multiplayer collaborative editor บน WebSocket — Figma พิจารณา CRDT และ OT แล้วตัดทั้งคู่ทิ้งเพราะซับซ้อนเกินจำเป็น เลือกใช้ central server ที่สั่ง order ของ optimistic edit ด้วยกติกา last-writer-wins ต่อ property แทน ([Figma Blog — How Figma's multiplayer technology works](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/))
 >
-> **Linear:**
-> - real-time issue tracking ผ่าน WebSocket
-> - optimistic update บน client, sync กับ server ผ่าน event — UX รู้สึก instant
+> **หลักการทั่วไปของ collaborative app ที่เน้น UX แบบ instant (แนวเดียวกับที่ issue tracker สมัยใหม่หลายเจ้าใช้):**
+> - optimistic update บน client ก่อน แล้ว sync กับ server ผ่าน event ทีหลัง — UX รู้สึกเร็วแม้ network latency จริงจะสูงกว่านั้น
 
 <Callout title="บทสรุปปิดท้ายในหนึ่งบรรทัด">
 บริการ real-time ที่มีรูปร่างแบบ production คือ **auth ตอน connect**, **rooms** สำหรับ routing, **heartbeat** เพื่อตรวจจับลิงก์ที่ตายแล้ว และ **protocol ที่มี type และเป็นมิตรต่อ reconnect** — แต่ละอย่างคือโมดูลที่คุณทำมาแล้ว ต่อสายเข้าด้วยกันบน server `ws` ตัวเดียว

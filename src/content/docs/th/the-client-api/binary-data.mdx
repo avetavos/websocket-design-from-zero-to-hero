@@ -162,13 +162,12 @@ export const binaryEchoCode = `(function () {
 
 > 💡 ตัวอย่างจากของจริง
 >
-> **Binance/Bybit WebSocket Streams:**
-> - ส่ง market data เป็น binary — compact กว่า JSON 3-5x
-> - `binaryType = 'arraybuffer'` + `DataView` เพื่อ parse order book update latency ต่ำ
+> **หลักการที่ exchange WebSocket API หลายเจ้าใช้ (เช่น Binance, Bybit; ไม่ระบุตัวเลข "compact กว่า JSON กี่เท่า" เพราะไม่พบแหล่งอ้างอิงปฐมภูมิยืนยัน):**
+> - บาง endpoint รองรับส่ง market data เป็น binary แทน JSON — ใช้ `binaryType = 'arraybuffer'` + `DataView` เพื่อ parse ด้วย latency ต่ำ
 >
-> **Figma Multiplayer:**
+> **หลักการทั่วไปของ multiplayer app (แนวเดียวกับที่ Figma ใช้):**
 > - ส่ง drawing operation เป็น binary frame
-> - ตรวจ bufferedAmount ก่อนส่ง batch operation เพื่อป้องกัน lag
+> - ตรวจ `bufferedAmount` ก่อนส่ง batch operation เพื่อป้องกัน lag
 
 <Callout title="binary ในลมหายใจเดียว">
 ส่งสตริงเพื่อให้ได้ text frame หรือส่ง `ArrayBuffer` / `TypedArray` / `Blob` เพื่อให้ได้ binary frame ตอนรับ ตั้ง `ws.binaryType` เป็น `'arraybuffer'` (อ่านระดับไบต์แบบ sync) หรือ `'blob'` (ค่าเริ่มต้น) และแยกแขนงใน `onmessage` ตามชนิดของ `event.data` เมื่อสตรีม ให้คุมจังหวะตาม `ws.bufferedAmount` เพื่อไม่ให้ buffer ขาออกพุ่งหนีไปไม่หยุด

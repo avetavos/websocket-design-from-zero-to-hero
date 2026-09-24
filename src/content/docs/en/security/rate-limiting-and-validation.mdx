@@ -97,6 +97,29 @@ export const bucketDemoCode = `(function () {
 
 Run it and read the verdicts: the malformed and oversized and unknown-type frames are **rejected** by the validator, and once the burst drains the five-token bucket the trailing frames are **throttled** regardless of their content. Two independent guards — one on *rate*, one on *shape* — and a single connection can no longer flood or confuse the server.
 
+## Common mistakes
+
+**No payload size limit**
+Symptoms:
+- Client sends a 100MB message — the server's buffer overflows
+- Causes a memory spike, which can crash the server
+- Set a max message size: reject anything over the limit and close the connection
+
+**Not validating message content**
+Symptoms:
+- Receiving a JSON message and passing it along without validating its schema
+- A malformed message crashes the consumer
+- Validate every incoming message against a schema (Zod or JSON Schema) before processing it
+
+> 💡 Real-world example
+>
+> **Discord Gateway:**
+> - Limits clients to 120 events per 60 seconds per connection ([Discord Developer Docs — Gateway](https://discord.com/developers/docs/topics/gateway))
+> - Exceeding it closes the connection with code 4008 (Rate limited) — the client has to reconnect and slow down
+>
+> **Binance WebSocket Streams:**
+> - Limits connections to 5 subscribe/unsubscribe requests per second, a maximum of 1024 streams per connection, and 300 connection attempts per 5 minutes per IP ([Binance API Docs — Rate limits](https://developers.binance.com/docs/binance-spot-api-docs/websocket-api/rate-limits))
+
 <Callout title="Bound the rate and the shape, per connection">
 A WebSocket has no built-in throttle, so add one: a **per-connection token bucket** caps how many messages a client can send, a **size cap** (use the library's `maxPayload`) stops oversized frames, and **`try/catch` parsing plus shape validation** stops malformed ones. Apply all three to every connection — one abusive client must never be able to starve the rest.
 </Callout>
